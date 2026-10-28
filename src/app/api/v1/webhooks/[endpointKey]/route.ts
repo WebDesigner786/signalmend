@@ -8,7 +8,7 @@ import {
 } from "../../../../../middleware/quotaEnforcer";
 import { processWebhookInline } from "../../../../../lib/server/webhook-processor";
 import { decryptSecret, verifyHmacSignature } from "../../../../../utils/crypto";
-import { redisClient, type JsonValue, type WebhookProcessingJob } from "../../../../../utils/redis";
+import { getRedisClient, type JsonValue, type WebhookProcessingJob } from "../../../../../utils/redis";
 import { prisma } from "../../../../../utils/prisma";
 
 export const runtime = "nodejs";
@@ -247,7 +247,7 @@ export async function POST(
   const quotaReservationToken = randomUUID();
 
   try {
-    const rateLimit = await redisClient.eval(
+    const rateLimit = await getRedisClient().eval(
       RATE_LIMIT_SCRIPT,
       1,
       `webhook:rate:${endpoint.workspaceId}`,
@@ -264,7 +264,7 @@ export async function POST(
       });
     }
 
-    const lock = await redisClient.set(
+    const lock = await getRedisClient().set(
       idempotencyKey,
       idempotencyToken,
       "EX",
@@ -278,7 +278,7 @@ export async function POST(
       );
     }
 
-    const quotaLock = await redisClient.set(
+    const quotaLock = await getRedisClient().set(
       quotaReservationKey,
       quotaReservationToken,
       "EX",
@@ -288,13 +288,13 @@ export async function POST(
     if (quotaLock === "OK") {
       const critical = getWebhookCriticality(rawBody);
       if (critical === null) {
-        await redisClient.eval(
+        await getRedisClient().eval(
           compareAndDeleteScript,
           1,
           quotaReservationKey,
           quotaReservationToken,
         );
-        await redisClient.eval(
+        await getRedisClient().eval(
           compareAndDeleteScript,
           1,
           idempotencyKey,
@@ -310,13 +310,13 @@ export async function POST(
         critical,
       );
       if (!quota.allowed) {
-        await redisClient.eval(
+        await getRedisClient().eval(
           compareAndDeleteScript,
           1,
           quotaReservationKey,
           quotaReservationToken,
         );
-        await redisClient.eval(
+        await getRedisClient().eval(
           compareAndDeleteScript,
           1,
           idempotencyKey,
@@ -356,7 +356,7 @@ export async function POST(
         data: { totalReceived: { increment: 1 } },
         select: { id: true },
       });
-      const completed = await redisClient.set(
+      const completed = await getRedisClient().set(
         idempotencyKey,
         "processed",
         "EX",
@@ -367,7 +367,7 @@ export async function POST(
         throw new Error("Webhook idempotency lock expired before completion");
       }
     } catch (error) {
-      await redisClient.eval(
+      await getRedisClient().eval(
         compareAndDeleteScript,
         1,
         idempotencyKey,
@@ -387,7 +387,7 @@ export async function POST(
     );
   } catch (error) {
     try {
-      await redisClient.eval(
+      await getRedisClient().eval(
         compareAndDeleteScript,
         1,
         idempotencyKey,

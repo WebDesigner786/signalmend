@@ -74,8 +74,8 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const { redisClient } = await import("../../../../../utils/redis");
-    const consumed = await redisClient.eval(
+    const { getRedisClient } = await import("../../../../../utils/redis");
+    const consumed = await getRedisClient().eval(
       consumeNonceScript,
       1,
       `oauth:slack:state:${state.nonce}`,

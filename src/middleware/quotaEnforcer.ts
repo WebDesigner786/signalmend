@@ -9,7 +9,7 @@ import type {
 
 import { decryptSecret, verifyHmacSignature } from "../utils/crypto";
 import { prisma } from "../utils/prisma";
-import { redisClient } from "../utils/redis";
+import { getRedisClient } from "../utils/redis";
 import type { WebhookContext } from "../routes/webhooks";
 
 const MONTHLY_QUOTAS = {
@@ -310,7 +310,7 @@ export const enforceWorkspaceQuota: preHandlerHookHandler = async (
     .digest("hex");
 
   try {
-    const lock = await redisClient.set(
+    const lock = await getRedisClient().set(
       idempotencyKey,
       reservationToken,
       "EX",
@@ -344,7 +344,7 @@ export const enforceWorkspaceQuota: preHandlerHookHandler = async (
           code: "AUTOMATION_CREDITS_EXHAUSTED",
           remainingCredits: result.remainingCredits,
         });
-        await redisClient.eval(
+        await getRedisClient().eval(
           `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`,
           1,
           idempotencyKey,
@@ -370,7 +370,7 @@ export const enforceWorkspaceQuota: preHandlerHookHandler = async (
         receivedRequests: result.receivedRequests,
         criticalGraceRequests: result.criticalGraceRequests,
       });
-      await redisClient.eval(
+      await getRedisClient().eval(
         `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`,
         1,
         idempotencyKey,
@@ -380,7 +380,7 @@ export const enforceWorkspaceQuota: preHandlerHookHandler = async (
     }
   } catch (error) {
     try {
-      await redisClient.eval(
+      await getRedisClient().eval(
         `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`,
         1,
         idempotencyKey,

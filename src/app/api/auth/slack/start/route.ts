@@ -71,8 +71,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       userId,
       env.dashboardJwtSecret,
     );
-    const { redisClient } = await import("../../../../../utils/redis");
-    const stored = await redisClient.set(
+    const { getRedisClient } = await import("../../../../../utils/redis");
+    const stored = await getRedisClient().set(
       `oauth:slack:state:${state.nonce}`,
       `${tenantId}:${userId}`,
       "EX",

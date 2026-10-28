@@ -4,7 +4,7 @@
   "private": true,
   "description": "Automated incident response and webhook processing engine",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "next dev",

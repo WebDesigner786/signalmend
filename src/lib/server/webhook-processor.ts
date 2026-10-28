@@ -13,7 +13,7 @@ import {
   SlackApiError,
 } from "../../integrations/slack";
 import {
-  redisClient,
+  getRedisClient,
   type JsonValue,
   type WebhookProcessingJob,
 } from "../../utils/redis";
@@ -314,7 +314,7 @@ async function releaseOwnedLock(key: string, token: string): Promise<void> {
     end
     return 0
   `;
-  await redisClient.eval(compareAndDelete, 1, key, token);
+  await getRedisClient().eval(compareAndDelete, 1, key, token);
 }
 
 async function resolveIncident(
@@ -366,7 +366,7 @@ async function resolveIncident(
     return { incident: alreadyCreated, isDuplicate: true };
   }
 
-  const acquired = await redisClient.set(
+  const acquired = await getRedisClient().set(
     lockKey,
     lockToken,
     "EX",

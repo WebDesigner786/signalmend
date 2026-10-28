@@ -11,7 +11,7 @@ import type {
 import { decryptSecret, verifyHmacSignature } from "../utils/crypto";
 import {
   closeRedisConnections,
-  redisClient,
+  getRedisClient,
   type JsonValue,
   type WebhookProcessingJob,
 } from "../utils/redis";
@@ -127,7 +127,7 @@ async function releaseIdempotencyLock(key: string, token: string): Promise<void>
     end
     return 0
   `;
-  await redisClient.eval(compareAndDelete, 1, key, token);
+  await getRedisClient().eval(compareAndDelete, 1, key, token);
 }
 
 const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
@@ -220,7 +220,7 @@ const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
     global: false,
     hook: "preHandler",
     timeWindow: RATE_LIMIT_WINDOW_MS,
-    redis: redisClient,
+    redis: getRedisClient(),
     keyGenerator: (request: FastifyRequest) =>
       request.webhookContext?.workspaceId ?? `unknown:${request.ip}`,
     errorResponseBuilder: (_request, context) => ({
@@ -326,7 +326,7 @@ const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
       const lockToken = randomUUID();
 
       try {
-        const lockAcquired = await redisClient.set(
+        const lockAcquired = await getRedisClient().set(
           lockKey,
           lockToken,
           "EX",
@@ -359,7 +359,7 @@ const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
             data: { totalReceived: { increment: 1 } },
             select: { id: true },
           });
-          const completed = await redisClient.set(
+          const completed = await getRedisClient().set(
             lockKey,
             "processed",
             "EX",

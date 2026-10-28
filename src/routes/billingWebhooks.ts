@@ -5,7 +5,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { env } from "../config/env";
-import { redisClient } from "../utils/redis";
+import { getRedisClient } from "../utils/redis";
 import { prisma } from "../utils/prisma";
 
 const BILLING_BODY_LIMIT_BYTES = 1_048_576;
@@ -139,7 +139,7 @@ async function findBillingWorkspace(
 }
 
 async function releaseEventLock(key: string, token: string): Promise<void> {
-  await redisClient.eval(
+  await getRedisClient().eval(
     `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`,
     1,
     key,
@@ -148,7 +148,7 @@ async function releaseEventLock(key: string, token: string): Promise<void> {
 }
 
 async function markEventProcessed(key: string, token: string): Promise<void> {
-  const result = await redisClient.eval(
+  const result = await getRedisClient().eval(
     `
       if redis.call("GET", KEYS[1]) == ARGV[1] then
         return redis.call("SET", KEYS[1], "processed", "EX", ARGV[2])
@@ -227,7 +227,7 @@ const billingWebhooksRoutes: FastifyPluginAsync = async (fastify) => {
       const lockToken = `${Date.now()}:${request.id}`;
 
       try {
-        const acquired = await redisClient.set(
+        const acquired = await getRedisClient().set(
           lockKey,
           lockToken,
           "EX",
@@ -235,7 +235,7 @@ const billingWebhooksRoutes: FastifyPluginAsync = async (fastify) => {
           "NX",
         );
         if (acquired !== "OK") {
-          const currentState = await redisClient.get(lockKey);
+          const currentState = await getRedisClient().get(lockKey);
           if (currentState === "processed") {
             return reply.code(200).send({ success: true, duplicate: true });
           }

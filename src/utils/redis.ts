@@ -41,38 +41,43 @@ function createRedisOptions(
   };
 }
 
-export const redisClient = new Redis(
-  env.redisUrl,
-  createRedisOptions(3),
-);
+let redisClient: Redis | undefined;
 
-redisClient.on("connect", () => {
-  console.info(JSON.stringify({ level: "info", event: "redis_connect" }));
-});
-redisClient.on("ready", () => {
-  console.info(JSON.stringify({ level: "info", event: "redis_ready" }));
-});
-redisClient.on("reconnecting", (delay: number) => {
-  console.warn(JSON.stringify({ level: "warn", event: "redis_reconnecting", delay }));
-});
-redisClient.on("close", () => {
-  console.warn(JSON.stringify({ level: "warn", event: "redis_closed" }));
-});
-redisClient.on("error", (error: Error) => {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      event: "redis_error",
-      message: error.message,
-    }),
-  );
-});
+export function getRedisClient(): Redis {
+  if (!redisClient) {
+    redisClient = new Redis(env.redisUrl, createRedisOptions(3));
+    redisClient.on("connect", () => {
+      console.info(JSON.stringify({ level: "info", event: "redis_connect" }));
+    });
+    redisClient.on("ready", () => {
+      console.info(JSON.stringify({ level: "info", event: "redis_ready" }));
+    });
+    redisClient.on("reconnecting", (delay: number) => {
+      console.warn(JSON.stringify({ level: "warn", event: "redis_reconnecting", delay }));
+    });
+    redisClient.on("close", () => {
+      console.warn(JSON.stringify({ level: "warn", event: "redis_closed" }));
+    });
+    redisClient.on("error", (error: Error) => {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "redis_error",
+          message: error.message,
+        }),
+      );
+    });
+  }
+  return redisClient;
+}
 
 let shutdownPromise: Promise<void> | undefined;
 
 export function closeRedisConnections(): Promise<void> {
   if (!shutdownPromise) {
-    shutdownPromise = redisClient.quit().then(() => undefined);
+    shutdownPromise = redisClient
+      ? redisClient.quit().then(() => undefined)
+      : Promise.resolve();
   }
 
   return shutdownPromise;
