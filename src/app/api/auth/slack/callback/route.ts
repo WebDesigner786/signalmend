@@ -5,10 +5,15 @@ import { Prisma } from "@prisma/client";
 import { env } from "../../../../../config/env";
 import { withTenantContext } from "../../../../../lib/server/tenantRls";
 import { verifySlackOAuthState } from "../../../../../lib/server/slackOAuthState";
+import {
+  markSlackHandshakeFailed,
+  verifySlackHandshake,
+} from "../../../../../lib/server/slack-handshake";
 import { decryptSecret } from "../../../../../utils/crypto";
 import { VaultService } from "../../../../../utils/vaultService";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const SlackOAuthResponseSchema = z.object({
   ok: z.literal(true),
@@ -130,7 +135,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: form.toString(),
-      signal: AbortSignal.timeout(env.axiosTimeout),
+      signal: AbortSignal.timeout(Math.min(env.axiosTimeout, 15_000)),
       cache: "no-store",
     });
   } catch (error) {
@@ -253,28 +258,42 @@ export async function GET(request: Request): Promise<NextResponse> {
     return jsonError("Unable to securely save the Slack integration", 500);
   }
 
+  const handshake = { tenantId: state.tenantId, credentialId };
   try {
-    const { enqueueSlackHandshake } = await import(
-      "../../../../../queues/slackHandshakeQueue"
-    );
-    await enqueueSlackHandshake({
-      tenantId: state.tenantId,
-      credentialId,
-    });
+    await verifySlackHandshake(handshake);
   } catch (error) {
     console.error(
       JSON.stringify({
         level: "error",
-        event: "slack_handshake_enqueue_failed",
+        event: "slack_handshake_verification_failed",
         tenantId: state.tenantId,
         credentialId,
         message: error instanceof Error ? error.message : "unknown error",
       }),
     );
-    return jsonError(
-      "Slack credentials were saved, but handshake verification could not be queued",
-      503,
-    );
+    try {
+      await markSlackHandshakeFailed(handshake);
+    } catch (statusError) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "slack_handshake_failure_status_update_failed",
+          tenantId: state.tenantId,
+          credentialId,
+          message:
+            statusError instanceof Error ? statusError.message : "unknown error",
+        }),
+      );
+      return jsonError("Slack verification failed and its status could not be saved", 503);
+    }
+
+    const failedUrl = new URL("/onboarding", callbackUrl.origin);
+    failedUrl.searchParams.set("tenantId", state.tenantId);
+    failedUrl.searchParams.set("slack", "failed");
+    return NextResponse.redirect(failedUrl, {
+      status: 303,
+      headers: { "cache-control": "no-store" },
+    });
   }
 
   const onboardingUrl = new URL("/onboarding", callbackUrl.origin);

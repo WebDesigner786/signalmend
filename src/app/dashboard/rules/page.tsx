@@ -313,7 +313,7 @@ export default function RulesPage() {
       }
       setRules((current) => [response.rule, ...current]);
       setForm(EMPTY_FORM);
-      setSuccess("Rule saved. The worker will evaluate it against new webhook payloads.");
+      setSuccess("Rule saved. It will be evaluated against new webhook events.");
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -575,7 +575,7 @@ export default function RulesPage() {
           <div className="rounded-2xl border border-amber-500/15 bg-amber-500/[0.04] p-4">
             <p className="text-[11px] font-semibold text-ink">Destination note</p>
             <p className="mt-1.5 text-[10px] leading-5 text-muted">
-              Rule storage and evaluation are provided by the API. Provider-specific routing requires an enabled integration and a corresponding worker dispatcher.
+              New incidents are sent to enabled Slack integrations. Discord delivery is not currently supported.
             </p>
           </div>
         </aside>

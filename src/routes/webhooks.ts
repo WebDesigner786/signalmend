@@ -16,12 +16,13 @@ import {
   type WebhookProcessingJob,
 } from "../utils/redis";
 import { prisma } from "../utils/prisma";
-import { enqueueWebhookJob } from "../queues/webhookQueue";
 import { enforceWorkspaceQuota } from "../middleware/quotaEnforcer";
 import { withTenantContext } from "../lib/server/tenantRls";
+import { processWebhookInline } from "../lib/server/webhook-processor";
 
 const JSON_BODY_LIMIT_BYTES = 1_048_576;
 const IDEMPOTENCY_TTL_SECONDS = 86_400;
+const PROCESSING_LOCK_TTL_SECONDS = 180;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 interface WebhookRouteParams {
@@ -329,7 +330,7 @@ const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
           lockKey,
           lockToken,
           "EX",
-          IDEMPOTENCY_TTL_SECONDS,
+          PROCESSING_LOCK_TTL_SECONDS,
           "NX",
         );
         if (lockAcquired !== "OK") {
@@ -352,43 +353,49 @@ const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
         };
 
         try {
-          await enqueueWebhookJob(job, idempotencyDigest);
+          await processWebhookInline(job);
+          await prisma.inboundWebhook.update({
+            where: { id: context.endpointId },
+            data: { totalReceived: { increment: 1 } },
+            select: { id: true },
+          });
+          const completed = await redisClient.set(
+            lockKey,
+            "processed",
+            "EX",
+            IDEMPOTENCY_TTL_SECONDS,
+            "XX",
+          );
+          if (completed !== "OK") {
+            throw new Error("Webhook idempotency lock expired before completion");
+          }
         } catch (error) {
           try {
             await releaseIdempotencyLock(lockKey, lockToken);
           } catch (releaseError) {
             request.log.error(
               { err: releaseError, endpointId: context.endpointId },
-              "Failed to release webhook idempotency lock after queue failure",
+              "Failed to release webhook idempotency lock after processing failure",
             );
           }
-          throw error;
+          request.log.error(
+            { err: error, endpointId: context.endpointId },
+            "Inline webhook processing failed",
+          );
+          return reply.code(500).send({ error: "Webhook processing failed" });
         }
 
-        void prisma.inboundWebhook
-          .update({
-            where: { id: context.endpointId },
-            data: { totalReceived: { increment: 1 } },
-            select: { id: true },
-          })
-          .catch((error: unknown) => {
-            request.log.error(
-              { err: error, endpointId: context.endpointId },
-              "Failed to increment webhook received counter",
-            );
-          });
-
-        return reply.code(202).send({
+        return reply.code(200).send({
           success: true,
           event_id: idempotencyDigest,
-          status: "queued",
+          status: "processed",
         });
       } catch (error) {
         request.log.error(
           { err: error, endpointId: context.endpointId },
-          "Failed to enqueue webhook payload",
+          "Failed to process webhook payload",
         );
-        return reply.code(503).send({ error: "Webhook could not be queued" });
+        return reply.code(503).send({ error: "Webhook could not be processed" });
       }
     },
   );

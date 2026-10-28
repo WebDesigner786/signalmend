@@ -7,23 +7,17 @@ import {
   type Incident,
   type IncidentRule,
 } from "@prisma/client";
-import { UnrecoverableError, Worker, type Job } from "bullmq";
 
 import {
   sendIncidentAlert,
   SlackApiError,
-} from "../integrations/slack";
-import { WEBHOOK_QUEUE_NAME } from "../queues/webhookQueue";
+} from "../../integrations/slack";
 import {
-  bullmqConnection,
-  closeRedisConnections,
-  registerRedisResourceCloser,
   redisClient,
   type JsonValue,
   type WebhookProcessingJob,
-} from "../utils/redis";
-import { prisma } from "../utils/prisma";
-import { CustomSecurityException } from "../utils/vaultService";
+} from "../../utils/redis";
+import { prisma } from "../../utils/prisma";
 
 const INCIDENT_LOCK_TTL_SECONDS = 60;
 
@@ -66,13 +60,6 @@ export class IncidentLockBusyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "IncidentLockBusyError";
-  }
-}
-
-class FatalCredentialSecurityError extends UnrecoverableError {
-  constructor(readonly securityException: CustomSecurityException) {
-    super(securityException.message);
-    this.name = "FatalCredentialSecurityError";
   }
 }
 
@@ -334,38 +321,35 @@ async function resolveIncident(
   job: WebhookProcessingJob,
   rule: IncidentRule,
   fields: ReturnType<typeof deriveIncidentFields>,
-  attempt: number,
 ): Promise<{ incident: Incident; isDuplicate: boolean }> {
   const fingerprint = getIncidentFingerprint(job, rule.id, fields);
   const lockKey = `incident:processing:${job.workspaceId}:${fingerprint}`;
   const lockToken = randomUUID();
 
   const recordDuplicate = async (existing: Incident): Promise<void> => {
-    if (attempt === 0) {
-      await prisma.$transaction([
-        prisma.incident.update({
-          where: { id: existing.id },
-          data: {
-            duplicateCount: { increment: 1 },
-            lastSeenAt: new Date(job.receivedAt),
+    await prisma.$transaction([
+      prisma.incident.update({
+        where: { id: existing.id },
+        data: {
+          duplicateCount: { increment: 1 },
+          lastSeenAt: new Date(job.receivedAt),
+        },
+      }),
+      prisma.auditLog.create({
+        data: {
+          workspaceId: job.workspaceId,
+          inboundWebhookId: job.endpointId,
+          incidentId: existing.id,
+          action: "duplicate_incident_suppressed",
+          resourceType: "incident",
+          resourceId: existing.id,
+          metadata: {
+            fingerprint,
+            sourceEventId: job.eventId,
           },
-        }),
-        prisma.auditLog.create({
-          data: {
-            workspaceId: job.workspaceId,
-            inboundWebhookId: job.endpointId,
-            incidentId: existing.id,
-            action: "duplicate_incident_suppressed",
-            resourceType: "incident",
-            resourceId: existing.id,
-            metadata: {
-              fingerprint,
-              sourceEventId: job.eventId,
-            },
-          },
-        }),
-      ]);
-    }
+        },
+      }),
+    ]);
   };
 
   const findExisting = (): Promise<Incident | null> =>
@@ -393,7 +377,7 @@ async function resolveIncident(
     const concurrentResult = await findExisting();
     if (!concurrentResult) {
       throw new IncidentLockBusyError(
-        `Fingerprint ${fingerprint} is being processed by another worker`,
+        `Fingerprint ${fingerprint} is being processed by another request`,
       );
     }
     await recordDuplicate(concurrentResult);
@@ -572,19 +556,19 @@ async function dispatchSlack(
   }
 }
 
-async function processWebhook(
-  job: Job<WebhookProcessingJob, void, "process-webhook">,
+export async function processWebhookInline(
+  job: WebhookProcessingJob,
 ): Promise<void> {
-  const payload = job.data.payload;
+  const payload = job.payload;
   if (!isJsonValue(payload)) {
-    throw new Error(`Webhook job ${job.id ?? "unknown"} contains invalid JSON data`);
+    throw new Error(`Webhook event ${job.eventId} contains invalid JSON data`);
   }
 
   const rules = await prisma.incidentRule.findMany({
     where: {
-      workspaceId: job.data.workspaceId,
+      workspaceId: job.workspaceId,
       isEnabled: true,
-      OR: [{ inboundWebhookId: null }, { inboundWebhookId: job.data.endpointId }],
+      OR: [{ inboundWebhookId: null }, { inboundWebhookId: job.endpointId }],
     },
     orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
   });
@@ -601,7 +585,7 @@ async function processWebhook(
           level: "warn",
           event: "incident_rule_invalid",
           ruleId: rule.id,
-          workspaceId: job.data.workspaceId,
+          workspaceId: job.workspaceId,
         }),
       );
       continue;
@@ -617,19 +601,18 @@ async function processWebhook(
       JSON.stringify({
         level: "info",
         event: "webhook_no_incident_rule_matched",
-        eventId: job.data.eventId,
-        workspaceId: job.data.workspaceId,
-        endpointId: job.data.endpointId,
+        eventId: job.eventId,
+        workspaceId: job.workspaceId,
+        endpointId: job.endpointId,
       }),
     );
     return;
   }
 
   const { incident, isDuplicate } = await resolveIncident(
-    job.data,
+    job,
     selected.rule,
     selected.fields,
-    job.attemptsMade,
   );
 
   if (isDuplicate) {
@@ -638,114 +621,10 @@ async function processWebhook(
         level: "info",
         event: "duplicate_incident_suppressed",
         incidentId: incident.id,
-        eventId: job.data.eventId,
-        attemptsMade: job.attemptsMade,
+        eventId: job.eventId,
       }),
     );
   }
 
-  try {
-    await dispatchSlack(job.data, incident);
-  } catch (error) {
-    if (error instanceof CustomSecurityException) {
-      throw new FatalCredentialSecurityError(error);
-    }
-    throw error;
-  }
+  await dispatchSlack(job, incident);
 }
-
-export const webhookWorker = new Worker<
-  WebhookProcessingJob,
-  void,
-  "process-webhook"
->(WEBHOOK_QUEUE_NAME, processWebhook, {
-  connection: bullmqConnection,
-  concurrency: 20,
-  lockDuration: 60_000,
-  stalledInterval: 30_000,
-  maxStalledCount: 2,
-});
-
-webhookWorker.on("ready", () => {
-  console.info(JSON.stringify({ level: "info", event: "webhook_worker_ready" }));
-});
-webhookWorker.on("active", (job) => {
-  console.info(
-    JSON.stringify({
-      level: "info",
-      event: "webhook_job_active",
-      jobId: job.id,
-      attempt: job.attemptsMade + 1,
-    }),
-  );
-});
-webhookWorker.on("completed", (job) => {
-  console.info(
-    JSON.stringify({
-      level: "info",
-      event: "webhook_job_completed",
-      jobId: job.id,
-      eventId: job.data.eventId,
-    }),
-  );
-});
-webhookWorker.on("failed", (job, error) => {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      event: "webhook_job_failed",
-      jobId: job?.id,
-      attemptsMade: job?.attemptsMade,
-      error: error.message,
-      stack: error.stack,
-    }),
-  );
-  if (error instanceof FatalCredentialSecurityError) {
-    process.exitCode = 1;
-    console.error(
-      JSON.stringify({
-        level: "fatal",
-        event: "worker_stopping_after_credential_authentication_failure",
-        jobId: job?.id,
-        message: error.securityException.message,
-      }),
-    );
-    void closeRedisConnections().catch((shutdownError: unknown) => {
-      console.error(
-        JSON.stringify({
-          level: "fatal",
-          event: "worker_security_shutdown_failed",
-          message:
-            shutdownError instanceof Error
-              ? shutdownError.message
-              : "Unknown shutdown error",
-        }),
-      );
-      process.exitCode = 1;
-    });
-  }
-});
-webhookWorker.on("error", (error) => {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      event: "webhook_worker_error",
-      error: error.message,
-      stack: error.stack,
-    }),
-  );
-});
-webhookWorker.on("stalled", (jobId) => {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      event: "webhook_job_stalled",
-      jobId,
-    }),
-  );
-});
-
-registerRedisResourceCloser(async () => {
-  await webhookWorker.close();
-  await prisma.$disconnect();
-});

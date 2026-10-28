@@ -31,6 +31,7 @@ function createRedisOptions(
 ): RedisOptions {
   return {
     maxRetriesPerRequest,
+    lazyConnect: true,
     enableReadyCheck: true,
     retryStrategy: reconnectDelay,
     reconnectOnError: (error) =>
@@ -45,73 +46,33 @@ export const redisClient = new Redis(
   createRedisOptions(3),
 );
 
-export const bullmqConnection = new Redis(
-  env.redisUrl,
-  createRedisOptions(null),
-);
-
-for (const [clientName, client] of [
-  ["redis", redisClient],
-  ["bullmq-redis", bullmqConnection],
-] as const) {
-  client.on("connect", () => {
-    console.info(JSON.stringify({ level: "info", event: "redis_connect", client: clientName }));
-  });
-  client.on("ready", () => {
-    console.info(JSON.stringify({ level: "info", event: "redis_ready", client: clientName }));
-  });
-  client.on("reconnecting", (delay: number) => {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        event: "redis_reconnecting",
-        client: clientName,
-        delay,
-      }),
-    );
-  });
-  client.on("close", () => {
-    console.warn(JSON.stringify({ level: "warn", event: "redis_closed", client: clientName }));
-  });
-  client.on("error", (error: Error) => {
-    console.error(
-      JSON.stringify({
-        level: "error",
-        event: "redis_error",
-        client: clientName,
-        message: error.message,
-      }),
-    );
-  });
-}
+redisClient.on("connect", () => {
+  console.info(JSON.stringify({ level: "info", event: "redis_connect" }));
+});
+redisClient.on("ready", () => {
+  console.info(JSON.stringify({ level: "info", event: "redis_ready" }));
+});
+redisClient.on("reconnecting", (delay: number) => {
+  console.warn(JSON.stringify({ level: "warn", event: "redis_reconnecting", delay }));
+});
+redisClient.on("close", () => {
+  console.warn(JSON.stringify({ level: "warn", event: "redis_closed" }));
+});
+redisClient.on("error", (error: Error) => {
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "redis_error",
+      message: error.message,
+    }),
+  );
+});
 
 let shutdownPromise: Promise<void> | undefined;
-const redisResourceClosers = new Set<() => Promise<void>>();
-
-export function registerRedisResourceCloser(
-  closeResource: () => Promise<void>,
-): () => void {
-  redisResourceClosers.add(closeResource);
-  return () => redisResourceClosers.delete(closeResource);
-}
 
 export function closeRedisConnections(): Promise<void> {
   if (!shutdownPromise) {
-    shutdownPromise = (async () => {
-      const resourceResults = await Promise.allSettled(
-        [...redisResourceClosers].map((closeResource) => closeResource()),
-      );
-      const clientResults = await Promise.allSettled([
-        redisClient.quit(),
-        bullmqConnection.quit(),
-      ]);
-      const failures = [...resourceResults, ...clientResults].flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "One or more Redis resources failed to close");
-      }
-    })();
+    shutdownPromise = redisClient.quit().then(() => undefined);
   }
 
   return shutdownPromise;

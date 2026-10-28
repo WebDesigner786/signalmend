@@ -40,7 +40,7 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function getCriticality(rawBody: Buffer): boolean | null {
+export function getWebhookCriticality(rawBody: Buffer): boolean | null {
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody.toString("utf8")) as unknown;
@@ -123,7 +123,7 @@ async function validateWebhookSignature(
   return false;
 }
 
-async function reserveMonthlyUsage(
+export async function reserveMonthlyUsage(
   workspaceId: string,
   tenantId: string,
   tier: WebhookContext["workspaceTier"],
@@ -294,7 +294,7 @@ export const enforceWorkspaceQuota: preHandlerHookHandler = async (
   if (!(await validateWebhookSignature(request, reply, context, rawBody))) {
     return;
   }
-  const criticality = getCriticality(rawBody);
+  const criticality = getWebhookCriticality(rawBody);
   if (criticality === null) {
     return;
   }

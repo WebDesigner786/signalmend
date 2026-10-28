@@ -8,7 +8,13 @@ const DashboardClaimsSchema = z.object({
   sub: z.string().min(1).max(255),
   exp: z.number().int().positive(),
   nbf: z.number().int().optional(),
+  workspace_id: z.string().uuid().optional(),
 });
+
+export interface DashboardIdentity {
+  userId: string;
+  pinnedWorkspaceId?: string;
+}
 
 function decodeBase64Url(value: string): Buffer {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) {
@@ -24,6 +30,12 @@ function decodeBase64Url(value: string): Buffer {
 export async function authenticateDashboardBearer(
   authorization: string | null,
 ): Promise<string> {
+  return (await authenticateDashboardIdentity(authorization)).userId;
+}
+
+export async function authenticateDashboardIdentity(
+  authorization: string | null,
+): Promise<DashboardIdentity> {
   const match = authorization?.match(/^Bearer ([A-Za-z0-9_.-]{1,8192})$/);
   if (!match) {
     throw new Error("A valid bearer token is required");
@@ -87,7 +99,10 @@ export async function authenticateDashboardBearer(
     if (!user) {
       throw new Error("Bearer token user is not registered");
     }
-    return user.id;
+    return {
+      userId: user.id,
+      ...(claims.workspace_id ? { pinnedWorkspaceId: claims.workspace_id } : {}),
+    };
   } catch {
     throw new Error("Invalid or expired bearer token");
   }

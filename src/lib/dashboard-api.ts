@@ -13,23 +13,36 @@ export class DashboardApiError extends Error {
   }
 }
 
-const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000"
-).replace(/\/+$/, "");
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+const API_BASE_URL = configuredApiBaseUrl
+  ? `${configuredApiBaseUrl.replace(/\/+$/, "").replace(/\/api\/v1$/i, "")}/api/v1`
+  : "/api/v1";
+
+function getApiPath(path: string): string {
+  const endpoint = path.startsWith("/api/v1/")
+    ? path.slice("/api/v1".length)
+    : path.startsWith("/")
+      ? path
+      : `/${path}`;
+  return `${API_BASE_URL}${endpoint}`;
+}
 
 export async function dashboardFetch<T>(
   path: string,
   session: DashboardSession,
   options: RequestInit = {},
 ): Promise<T> {
-  const url = new URL(`${API_BASE_URL}${path}`);
+  const url = new URL(getApiPath(path), window.location.origin);
   if (session.workspaceId) {
     url.searchParams.set("workspace_id", session.workspaceId);
   }
+  const requestUrl = API_BASE_URL.startsWith("/")
+    ? `${url.pathname}${url.search}`
+    : url.toString();
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetch(requestUrl, {
       ...options,
       headers: {
         accept: "application/json",

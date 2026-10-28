@@ -73,7 +73,11 @@ function isEndpoint(value: unknown): value is WebhookEndpoint {
 }
 
 function endpointUrl(key: string): string {
-  return `${getDashboardApiBaseUrl()}/api/v1/webhooks/${encodeURIComponent(key)}`;
+  const baseUrl = getDashboardApiBaseUrl();
+  const publicBaseUrl = baseUrl.startsWith("/")
+    ? `${window.location.origin}${baseUrl}`
+    : baseUrl;
+  return `${publicBaseUrl}/webhooks/${encodeURIComponent(key)}`;
 }
 
 function InlineAlert({
@@ -401,7 +405,7 @@ export default function EndpointsPage() {
                   Require signature verification
                 </span>
                 <span className="mt-1 block text-[10px] leading-4 text-muted">
-                  Reject unauthenticated payloads before they enter the processing queue.
+                  Reject unauthenticated payloads before they enter the automation pipeline.
                 </span>
               </span>
             </label>
