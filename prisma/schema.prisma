@@ -1,0 +1,345 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubscriptionTier {
+  free
+  pro
+  enterprise
+
+  @@map("subscription_tier")
+}
+
+enum TenantTier {
+  free
+  premium
+
+  @@map("tenant_tier")
+}
+
+enum TenantMemberRole {
+  owner
+  admin
+  member
+
+  @@map("tenant_member_role")
+}
+
+enum IntegrationProvider {
+  slack
+  google_sheets
+  discord
+  email
+
+  @@map("integration_provider")
+}
+
+enum IncidentSeverity {
+  critical
+  warning
+  info
+
+  @@map("incident_severity")
+}
+
+enum IncidentStatus {
+  triggered
+  acknowledged
+  resolved
+  silenced
+
+  @@map("incident_status")
+}
+
+enum WorkspaceRole {
+  owner
+  admin
+  member
+
+  @@map("workspace_role")
+}
+
+model User {
+  id                String            @id @default(uuid()) @db.Uuid
+  email             String            @unique @db.VarChar(320)
+  name              String?           @db.VarChar(255)
+  externalAuthId    String?           @unique @map("external_auth_id") @db.VarChar(255)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  ownedWorkspaces   Workspace[]       @relation("WorkspaceOwner")
+  memberships       WorkspaceMember[]
+  tenantMemberships TenantMember[]
+  auditLogs         AuditLog[]        @relation("AuditActor")
+
+  @@map("users")
+}
+
+model Tenant {
+  id                    String                @id @default(uuid()) @db.Uuid
+  name                  String                @db.VarChar(255)
+  businessNiche         String                @map("business_niche") @db.VarChar(120)
+  tier                  TenantTier            @default(free)
+  activeTokenAllowances Int                   @default(1000) @map("active_token_allowances")
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  encryptionKeys        TenantEncryptionKey[]
+  encryptedCredentials  EncryptedCredential[]
+  automatedRules        AutomatedRule[]
+  members               TenantMember[]
+  workspace             Workspace?
+
+  @@index([tier])
+  @@map("tenants")
+}
+
+model TenantEncryptionKey {
+  id               String                @id @default(uuid()) @db.Uuid
+  tenantId         String                @map("tenant_id") @db.Uuid
+  keyReference     String                @map("key_reference") @db.VarChar(512)
+  keyVersion       Int                   @map("key_version")
+  encryptedDataKey String                @map("encrypted_data_key") @db.Text
+  wrappingIv       String                @map("wrapping_iv") @db.VarChar(64)
+  isActive         Boolean               @default(true) @map("is_active")
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  credentials      EncryptedCredential[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, keyReference])
+  @@unique([tenantId, keyVersion])
+  @@index([tenantId, isActive])
+  @@map("tenant_encryption_keys")
+}
+
+model TenantMember {
+  id        String           @id @default(uuid()) @db.Uuid
+  tenantId  String           @map("tenant_id") @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  role      TenantMemberRole @default(member)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("tenant_members")
+}
+
+model EncryptedCredential {
+  id                    String              @id @default(uuid()) @db.Uuid
+  tenantId              String              @map("tenant_id") @db.Uuid
+  tenantEncryptionKeyId String              @map("tenant_encryption_key_id") @db.Uuid
+  serviceName           String              @map("service_name") @db.VarChar(100)
+  name                  String              @db.VarChar(255)
+  encryptedPayload      String              @map("encrypted_payload") @db.Text
+  encryptionIv          String              @map("encryption_iv") @db.VarChar(64)
+  authenticationTag     String              @map("authentication_tag") @db.VarChar(64)
+  metadata              Json                @default("{}") @db.JsonB
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantEncryptionKey   TenantEncryptionKey @relation(fields: [tenantId, tenantEncryptionKeyId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, serviceName, name])
+  @@unique([tenantEncryptionKeyId, encryptionIv])
+  @@index([tenantId, serviceName])
+  @@map("encrypted_credentials")
+}
+
+model AutomatedRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  conditions  Json     @db.JsonB
+  actions     Json     @default("{}") @db.JsonB
+  isEnabled   Boolean  @default(true) @map("is_enabled")
+  priority    Int      @default(100)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isEnabled, priority])
+  @@map("automated_rules")
+}
+
+model Workspace {
+  id                     String            @id @default(uuid()) @db.Uuid
+  name                   String            @db.VarChar(255)
+  slug                   String            @unique @db.VarChar(255)
+  ownerId                String            @map("owner_id") @db.Uuid
+  tenantId               String?           @unique @map("tenant_id") @db.Uuid
+  subscriptionTier       SubscriptionTier  @default(free) @map("subscription_tier")
+  lemonSqueezyCustomerId String?           @unique @map("lemon_squeezy_customer_id") @db.VarChar(255)
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner                  User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  tenant                 Tenant?           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  members                WorkspaceMember[]
+  inboundWebhooks        InboundWebhook[]
+  incidentRules          IncidentRule[]
+  incidents              Incident[]
+  integrations           Integration[]
+  auditLogs              AuditLog[]
+  monthlyUsage           WorkspaceUsage[]
+
+  @@index([ownerId])
+  @@index([subscriptionTier])
+  @@map("workspaces")
+}
+
+model WorkspaceUsage {
+  id                    String    @id @default(uuid()) @db.Uuid
+  workspaceId           String    @map("workspace_id") @db.Uuid
+  monthStart            DateTime  @map("month_start") @db.Date
+  receivedRequests      Int       @default(0) @map("received_requests")
+  criticalGraceRequests Int       @default(0) @map("critical_grace_requests")
+  quotaAlerted          Boolean   @default(false) @map("quota_alerted")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, monthStart])
+  @@index([monthStart])
+  @@map("workspace_usage")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid()) @db.Uuid
+  workspaceId String        @map("workspace_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  slackUserId String?       @map("slack_user_id") @db.VarChar(64)
+  role        WorkspaceRole @default(member)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@unique([workspaceId, slackUserId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model InboundWebhook {
+  id                 String         @id @default(uuid()) @db.Uuid
+  workspaceId        String         @map("workspace_id") @db.Uuid
+  name               String         @db.VarChar(255)
+  endpointKey        String         @unique @map("endpoint_key") @db.VarChar(64)
+  secretKeyEncrypted String?        @map("secret_key_encrypted") @db.Text
+  isActive           Boolean        @default(true) @map("is_active")
+  requireSignature   Boolean        @default(false) @map("require_signature")
+  signatureHeader    String         @default("x-signature") @map("signature_header") @db.VarChar(128)
+  totalReceived      BigInt         @default(0) @map("total_received")
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  incidentRules      IncidentRule[]
+  incidents          Incident[]
+  auditLogs          AuditLog[]
+
+  @@index([workspaceId, isActive])
+  @@index([workspaceId, createdAt])
+  @@map("inbound_webhooks")
+}
+
+model IncidentRule {
+  id               String            @id @default(uuid()) @db.Uuid
+  workspaceId      String            @map("workspace_id") @db.Uuid
+  inboundWebhookId String?           @map("inbound_webhook_id") @db.Uuid
+  name             String            @db.VarChar(255)
+  description      String?           @db.Text
+  isEnabled        Boolean           @default(true) @map("is_enabled")
+  priority         Int               @default(100)
+  conditions       Json              @db.JsonB
+  actions          Json              @default("{}") @db.JsonB
+  severity         IncidentSeverity?
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  inboundWebhook   InboundWebhook?   @relation(fields: [inboundWebhookId], references: [id], onDelete: SetNull)
+  incidents        Incident[]
+
+  @@index([workspaceId, isEnabled, priority])
+  @@index([inboundWebhookId])
+  @@map("incident_rules")
+}
+
+model Incident {
+  id               String           @id @default(uuid()) @db.Uuid
+  workspaceId      String           @map("workspace_id") @db.Uuid
+  inboundWebhookId String?          @map("inbound_webhook_id") @db.Uuid
+  incidentRuleId   String?          @map("incident_rule_id") @db.Uuid
+  idempotencyKey   String?          @map("idempotency_key") @db.VarChar(128)
+  title            String           @db.VarChar(500)
+  service          String?          @db.VarChar(255)
+  environment      String?          @db.VarChar(100)
+  severity         IncidentSeverity @default(critical)
+  status           IncidentStatus   @default(triggered)
+  rawPayload       Json             @map("raw_payload") @db.JsonB
+  acknowledgedBy   String?          @map("acknowledged_by") @db.VarChar(255)
+  acknowledgedAt   DateTime?        @map("acknowledged_at") @db.Timestamptz(6)
+  resolvedAt       DateTime?        @map("resolved_at") @db.Timestamptz(6)
+  silencedUntil    DateTime?        @map("silenced_until") @db.Timestamptz(6)
+  duplicateCount   Int              @default(0) @map("duplicate_count")
+  lastSeenAt       DateTime         @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  inboundWebhook   InboundWebhook?  @relation(fields: [inboundWebhookId], references: [id], onDelete: SetNull)
+  incidentRule     IncidentRule?    @relation(fields: [incidentRuleId], references: [id], onDelete: SetNull)
+  auditLogs        AuditLog[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, severity, createdAt])
+  @@index([inboundWebhookId, createdAt])
+  @@index([incidentRuleId])
+  @@map("incidents")
+}
+
+model Integration {
+  id                    String              @id @default(uuid()) @db.Uuid
+  workspaceId           String              @map("workspace_id") @db.Uuid
+  provider              IntegrationProvider
+  name                  String              @db.VarChar(255)
+  config                Json                @default("{}") @db.JsonB
+  accessTokenEncrypted  String?             @map("access_token_encrypted") @db.Text
+  refreshTokenEncrypted String?             @map("refresh_token_encrypted") @db.Text
+  isEnabled             Boolean             @default(true) @map("is_enabled")
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace             Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, provider, isEnabled])
+  @@map("integrations")
+}
+
+model AuditLog {
+  id               String          @id @default(uuid()) @db.Uuid
+  workspaceId      String          @map("workspace_id") @db.Uuid
+  actorUserId      String?         @map("actor_user_id") @db.Uuid
+  inboundWebhookId String?         @map("inbound_webhook_id") @db.Uuid
+  incidentId       String?         @map("incident_id") @db.Uuid
+  action           String          @db.VarChar(100)
+  resourceType     String          @map("resource_type") @db.VarChar(100)
+  resourceId       String?         @map("resource_id") @db.VarChar(255)
+  metadata         Json            @default("{}") @db.JsonB
+  ipAddress        String?         @map("ip_address") @db.VarChar(45)
+  userAgent        String?         @map("user_agent") @db.VarChar(512)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace        Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor            User?           @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  inboundWebhook   InboundWebhook? @relation(fields: [inboundWebhookId], references: [id], onDelete: SetNull)
+  incident         Incident?       @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, action, createdAt])
+  @@index([incidentId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
