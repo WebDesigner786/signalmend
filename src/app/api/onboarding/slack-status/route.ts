@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 
-import { authenticateDashboardBearer } from "../../../../lib/server/dashboard-auth";
+import { getAuthenticatedUserId } from "../../../../lib/server/auth-session";
 import { withTenantContext } from "../../../../lib/server/tenantRls";
 
 export const runtime = "nodejs";
@@ -14,14 +14,10 @@ function isJsonObject(value: Prisma.JsonValue): value is Prisma.JsonObject {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  let userId: string;
-  try {
-    userId = await authenticateDashboardBearer(
-      request.headers.get("authorization"),
-    );
-  } catch {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json(
-      { error: "Your secure session has expired. Sign in again to continue." },
+      { error: "Sign in to check your Slack connection." },
       { status: 401, headers: { "cache-control": "no-store" } },
     );
   }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 
 import { env } from "../../../../../config/env";
-import { authenticateDashboardBearer } from "../../../../../lib/server/dashboard-auth";
+import { getAuthenticatedUserId } from "../../../../../lib/server/auth-session";
 import {
   createSlackOAuthState,
 } from "../../../../../lib/server/slackOAuthState";
@@ -22,14 +22,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  let userId: string;
-  try {
-    userId = await authenticateDashboardBearer(
-      request.headers.get("authorization"),
-    );
-  } catch {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json(
-      { error: "Authentication is required" },
+      { error: "Sign in to connect a Slack workspace." },
       { status: 401, headers: { "cache-control": "no-store" } },
     );
   }

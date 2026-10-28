@@ -44,6 +44,7 @@ const environmentSchema = z.object({
     .refine((value) => hasProtocol(value, ["https:", "http:"]))
     .optional(),
   DASHBOARD_JWT_SECRET: z.string().min(32),
+  NEXTAUTH_SECRET: z.string().min(32),
   LEMON_SQUEEZY_WEBHOOK_SECRET: z.string().trim().min(1),
 });
 
@@ -71,6 +72,7 @@ function parseEnvironment() {
     slackClientSecret: parsedEnvironment.data.SLACK_CLIENT_SECRET,
     slackRedirectUri: parsedEnvironment.data.SLACK_REDIRECT_URI,
     dashboardJwtSecret: parsedEnvironment.data.DASHBOARD_JWT_SECRET,
+    nextAuthSecret: parsedEnvironment.data.NEXTAUTH_SECRET,
     lemonSqueezyWebhookSecret: parsedEnvironment.data.LEMON_SQUEEZY_WEBHOOK_SECRET,
   } as const;
 }

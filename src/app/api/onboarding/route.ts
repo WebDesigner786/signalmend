@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { authenticateDashboardBearer } from "../../../lib/server/dashboard-auth";
+import { getAuthenticatedUserId } from "../../../lib/server/auth-session";
 import { withTenantContext } from "../../../lib/server/tenantRls";
 import { encryptSecret } from "../../../utils/crypto";
 import { prisma } from "../../../utils/prisma";
@@ -12,19 +12,15 @@ export const runtime = "nodejs";
 const OnboardingSchema = z.object({
   businessName: z.string().trim().min(2).max(255),
   businessNiche: z.string().trim().min(2).max(120),
-  workspaceId: z.string().uuid(),
+  workspaceId: z.string().uuid().optional(),
   tenantId: z.string().uuid().optional(),
 });
 
 export async function GET(request: Request): Promise<NextResponse> {
-  let userId: string;
-  try {
-    userId = await authenticateDashboardBearer(
-      request.headers.get("authorization"),
-    );
-  } catch {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json(
-      { error: "Your secure session has expired. Sign in again to continue." },
+      { error: "Sign in to continue setting up your business." },
       { status: 401, headers: { "cache-control": "no-store" } },
     );
   }
@@ -68,14 +64,10 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  let userId: string;
-  try {
-    userId = await authenticateDashboardBearer(
-      request.headers.get("authorization"),
-    );
-  } catch {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json(
-      { error: "Your secure session has expired. Sign in again to continue." },
+      { error: "Sign in to continue setting up your business." },
       { status: 401, headers: { "cache-control": "no-store" } },
     );
   }
@@ -100,43 +92,48 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let tenantId = parsed.data.tenantId ?? "";
   try {
-    const workspace = await prisma.workspace.findFirst({
-      where: {
-        id: parsed.data.workspaceId,
-        OR: [
-          { ownerId: userId },
-          {
-            members: {
-              some: {
-                userId,
-                role: { in: ["owner", "admin"] },
+    if (!parsed.data.workspaceId && parsed.data.tenantId) {
+      return NextResponse.json(
+        { error: "Choose a workspace before continuing this setup." },
+        { status: 409, headers: { "cache-control": "no-store" } },
+      );
+    }
+
+    const workspace = parsed.data.workspaceId
+      ? await prisma.workspace.findFirst({
+          where: {
+            id: parsed.data.workspaceId,
+            OR: [
+              { ownerId: userId },
+              {
+                members: {
+                  some: {
+                    userId,
+                    role: { in: ["owner", "admin"] },
+                  },
+                },
               },
-            },
+            ],
           },
-        ],
-      },
-      select: { id: true, tenantId: true },
-    });
-    if (!workspace) {
+          select: { id: true, tenantId: true },
+        })
+      : null;
+    if (parsed.data.workspaceId && !workspace) {
       return NextResponse.json(
         { error: "Choose a workspace you have permission to manage." },
         { status: 403, headers: { "cache-control": "no-store" } },
       );
     }
 
-    tenantId = workspace.tenantId ?? parsed.data.tenantId ?? randomUUID();
-    if (
-      parsed.data.tenantId &&
-      workspace.tenantId &&
-      parsed.data.tenantId !== workspace.tenantId
-    ) {
+    tenantId = workspace?.tenantId ?? parsed.data.tenantId ?? randomUUID();
+    if (parsed.data.tenantId && workspace?.tenantId && parsed.data.tenantId !== workspace.tenantId) {
       return NextResponse.json(
         { error: "This setup belongs to a different workspace." },
         { status: 403, headers: { "cache-control": "no-store" } },
       );
     }
 
-    if (workspace.tenantId) {
+    if (workspace?.tenantId) {
       const tenant = await withTenantContext(tenantId, async (transaction) => {
         const membership = await transaction.tenantMember.findUnique({
           where: { tenantId_userId: { tenantId, userId } },
@@ -198,7 +195,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    if (parsed.data.tenantId) {
+    if (parsed.data.tenantId && workspace) {
       return NextResponse.json(
         { error: "This business is not linked to the selected workspace." },
         { status: 409, headers: { "cache-control": "no-store" } },
@@ -206,6 +203,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const encryptedDataKey = encryptSecret(randomBytes(32).toString("base64url"));
+    const workspaceSlug = `${parsed.data.businessName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 60) || "workspace"}-${randomBytes(4).toString("hex")}`;
+    let createdWorkspaceId = "";
     await withTenantContext(tenantId, async (transaction) => {
       await transaction.tenant.create({
         data: {
@@ -226,15 +229,30 @@ export async function POST(request: Request): Promise<NextResponse> {
       await transaction.tenantMember.create({
         data: { tenantId, userId, role: "owner" },
       });
-      await transaction.workspace.update({
-        where: { id: workspace.id },
-        data: { tenantId },
-      });
+      if (workspace) {
+        await transaction.workspace.update({
+          where: { id: workspace.id },
+          data: { tenantId },
+        });
+        createdWorkspaceId = workspace.id;
+      } else {
+        const createdWorkspace = await transaction.workspace.create({
+          data: {
+            name: parsed.data.businessName,
+            slug: workspaceSlug,
+            ownerId: userId,
+            tenantId,
+          },
+          select: { id: true },
+        });
+        createdWorkspaceId = createdWorkspace.id;
+      }
     });
 
     return NextResponse.json(
       {
         tenantId,
+        workspaceId: createdWorkspaceId,
         businessName: parsed.data.businessName,
         businessNiche: parsed.data.businessNiche,
       },

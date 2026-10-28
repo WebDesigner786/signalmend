@@ -69,6 +69,7 @@ model User {
   email             String            @unique @db.VarChar(320)
   name              String?           @db.VarChar(255)
   externalAuthId    String?           @unique @map("external_auth_id") @db.VarChar(255)
+  passwordHash      String?           @map("password_hash") @db.VarChar(255)
   createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
   ownedWorkspaces   Workspace[]       @relation("WorkspaceOwner")
