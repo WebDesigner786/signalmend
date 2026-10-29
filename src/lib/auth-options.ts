@@ -3,6 +3,7 @@ import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { z } from "zod";
 
+import { env } from "../config/env";
 import { prisma } from "../utils/prisma";
 
 const CredentialsSchema = z.object({
@@ -15,7 +16,7 @@ const CredentialsSchema = z.object({
 });
 
 export const authOptions: NextAuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: env.nextAuthSecret,
   session: {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60,
