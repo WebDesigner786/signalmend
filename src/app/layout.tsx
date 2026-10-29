@@ -6,10 +6,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "SignalMend | Incident response",
+    default: "SignalMend | Incident response, without the noise",
     template: "%s | SignalMend",
   },
-  description: "Secure webhook operations and automated incident response.",
+  description:
+    "Turn scattered alerts into clear, actionable incidents. SignalMend connects your webhooks, verifies incoming events, and routes the right signals to your team.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

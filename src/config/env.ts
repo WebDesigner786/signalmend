@@ -13,84 +13,130 @@ function hasProtocol(
   }
 }
 
-const environmentSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  HOST: z.string().trim().min(1).default("0.0.0.0"),
-  PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
-  AXIOS_TIMEOUT: z.coerce.number().int().min(100).max(120_000).default(10_000),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
-    .default("info"),
-  DATABASE_URL: z.string().url(),
-  REDIS_URL: z
-    .string()
-    .url()
-    .refine(
-      (value) => hasProtocol(value, ["redis:", "rediss:"]),
-      { message: "must use the redis:// or rediss:// protocol" },
-    ),
-  ENCRYPTION_SECRET: z
-    .string()
-    .min(32, "must contain at least 32 characters")
-    .refine((value) => Buffer.byteLength(value, "utf8") >= 32, {
-      message: "must contain at least 32 bytes when encoded as UTF-8",
-    }),
-  SLACK_SIGNING_SECRET: z.string().trim().min(1),
-  SLACK_CLIENT_ID: z.string().trim().min(1).optional(),
-  SLACK_CLIENT_SECRET: z.string().trim().min(1).optional(),
-  SLACK_REDIRECT_URI: z
-    .string()
-    .url()
-    .refine((value) => hasProtocol(value, ["https:", "http:"]))
-    .optional(),
-  DASHBOARD_JWT_SECRET: z.string().min(32),
-  NEXTAUTH_SECRET: z.string().min(32),
-  LEMON_SQUEEZY_WEBHOOK_SECRET: z.string().trim().min(1),
-});
+const environmentProperties = {
+  nodeEnv: {
+    envNames: ["NODE_ENV"],
+    schema: z.enum(["development", "test", "production"]).default("development"),
+  },
+  host: {
+    envNames: ["HOST"],
+    schema: z.string().trim().min(1).default("0.0.0.0"),
+  },
+  port: {
+    envNames: ["PORT"],
+    schema: z.coerce.number().int().min(1).max(65_535).default(3000),
+  },
+  axiosTimeout: {
+    envNames: ["AXIOS_TIMEOUT"],
+    schema: z.coerce.number().int().min(100).max(120_000).default(10_000),
+  },
+  logLevel: {
+    envNames: ["LOG_LEVEL"],
+    schema: z
+      .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+      .default("info"),
+  },
+  databaseUrl: {
+    envNames: ["DATABASE_URL"],
+    schema: z.string().url(),
+  },
+  redisUrl: {
+    envNames: ["REDIS_URL"],
+    schema: z
+      .string()
+      .url()
+      .refine(
+        (value) => hasProtocol(value, ["redis:", "rediss:"]),
+        { message: "must use the redis:// or rediss:// protocol" },
+      ),
+  },
+  encryptionSecret: {
+    envNames: ["ENCRYPTION_SECRET"],
+    schema: z
+      .string()
+      .min(32, "must contain at least 32 characters")
+      .refine((value) => Buffer.byteLength(value, "utf8") >= 32, {
+        message: "must contain at least 32 bytes when encoded as UTF-8",
+      }),
+  },
+  slackSigningSecret: {
+    envNames: ["SLACK_SIGNING_SECRET"],
+    schema: z.string().trim().min(1),
+  },
+  slackClientId: {
+    envNames: ["SLACK_CLIENT_ID"],
+    schema: z.string().trim().min(1).optional(),
+  },
+  slackClientSecret: {
+    envNames: ["SLACK_CLIENT_SECRET"],
+    schema: z.string().trim().min(1).optional(),
+  },
+  slackRedirectUri: {
+    envNames: ["SLACK_REDIRECT_URI"],
+    schema: z
+      .string()
+      .url()
+      .refine((value) => hasProtocol(value, ["https:", "http:"]))
+      .optional(),
+  },
+  dashboardJwtSecret: {
+    envNames: ["DASHBOARD_JWT_SECRET"],
+    schema: z.string().min(32),
+  },
+  nextAuthSecret: {
+    envNames: ["NEXTAUTH_SECRET", "AUTH_SECRET"],
+    schema: z.string().min(32),
+  },
+  lemonSqueezyWebhookSecret: {
+    envNames: ["LEMON_SQUEEZY_WEBHOOK_SECRET", "LEMONSQUEEZY_WEBHOOK_SECRET"],
+    schema: z.string().trim().min(1),
+  },
+} as const;
 
-function parseEnvironment() {
-  const parsedEnvironment = environmentSchema.safeParse(process.env);
+export type Environment = {
+  [Property in keyof typeof environmentProperties]: z.output<
+    (typeof environmentProperties)[Property]["schema"]
+  >;
+};
 
-  if (!parsedEnvironment.success) {
-    const details = parsedEnvironment.error.issues
-      .map((issue) => `${issue.path.join(".") || "environment"}: ${issue.message}`)
-      .join("; ");
-    throw new Error(`Invalid environment configuration: ${details}`);
+const parsedProperties = new Map<keyof Environment, unknown>();
+
+function getEnvironmentProperty(property: keyof Environment) {
+  if (parsedProperties.has(property)) {
+    return parsedProperties.get(property);
   }
 
-  return {
-    nodeEnv: parsedEnvironment.data.NODE_ENV,
-    host: parsedEnvironment.data.HOST,
-    port: parsedEnvironment.data.PORT,
-    axiosTimeout: parsedEnvironment.data.AXIOS_TIMEOUT,
-    logLevel: parsedEnvironment.data.LOG_LEVEL,
-    databaseUrl: parsedEnvironment.data.DATABASE_URL,
-    redisUrl: parsedEnvironment.data.REDIS_URL,
-    encryptionSecret: parsedEnvironment.data.ENCRYPTION_SECRET,
-    slackSigningSecret: parsedEnvironment.data.SLACK_SIGNING_SECRET,
-    slackClientId: parsedEnvironment.data.SLACK_CLIENT_ID,
-    slackClientSecret: parsedEnvironment.data.SLACK_CLIENT_SECRET,
-    slackRedirectUri: parsedEnvironment.data.SLACK_REDIRECT_URI,
-    dashboardJwtSecret: parsedEnvironment.data.DASHBOARD_JWT_SECRET,
-    nextAuthSecret: parsedEnvironment.data.NEXTAUTH_SECRET,
-    lemonSqueezyWebhookSecret: parsedEnvironment.data.LEMON_SQUEEZY_WEBHOOK_SECRET,
-  } as const;
-}
+  const definition = environmentProperties[property];
+  const envName =
+    definition.envNames.find((name) => Boolean(process.env[name]?.trim())) ??
+    definition.envNames.find((name) => process.env[name] !== undefined) ??
+    definition.envNames[0];
+  const parsed = definition.schema.safeParse(process.env[envName]);
 
-export type Environment = ReturnType<typeof parseEnvironment>;
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .map((issue) =>
+        issue.path.length > 0
+          ? `${issue.path.join(".")}: ${issue.message}`
+          : issue.message,
+      )
+      .join("; ");
+    throw new Error(`Invalid environment configuration: ${envName}: ${details}`);
+  }
 
-let parsedEnvironment: Environment | undefined;
-
-function getEnvironment(): Environment {
-  parsedEnvironment ??= parseEnvironment();
-  return parsedEnvironment;
+  parsedProperties.set(property, parsed.data);
+  return parsed.data;
 }
 
 export const env: Environment = new Proxy({} as Environment, {
   get(_target, property: string | symbol) {
-    if (typeof property !== "string") {
+    if (
+      typeof property !== "string" ||
+      !Object.prototype.hasOwnProperty.call(environmentProperties, property)
+    ) {
       return undefined;
     }
-    return getEnvironment()[property as keyof Environment];
+
+    return getEnvironmentProperty(property as keyof Environment);
   },
 });

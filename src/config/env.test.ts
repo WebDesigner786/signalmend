@@ -19,4 +19,24 @@ describe("environment configuration", () => {
     const { env } = await import("./env");
     expect(() => env.redisUrl).toThrow(/Invalid environment configuration/);
   });
+
+  it("validates only the requested setting", async () => {
+    const secret = "test-nextauth-secret-that-is-long-enough";
+    vi.stubEnv("NEXTAUTH_SECRET", secret);
+    vi.stubEnv("REDIS_URL", "");
+
+    const { env } = await import("./env");
+
+    expect(env.nextAuthSecret).toBe(secret);
+    expect(() => env.redisUrl).toThrow(/REDIS_URL/);
+  });
+
+  it("accepts the existing Lemon Squeezy webhook variable name", async () => {
+    vi.stubEnv("LEMON_SQUEEZY_WEBHOOK_SECRET", "");
+    vi.stubEnv("LEMONSQUEEZY_WEBHOOK_SECRET", "test-webhook-secret");
+
+    const { env } = await import("./env");
+
+    expect(env.lemonSqueezyWebhookSecret).toBe("test-webhook-secret");
+  });
 });
