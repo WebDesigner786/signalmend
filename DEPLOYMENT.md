@@ -65,8 +65,12 @@ schema changes to an existing production database.
 
 In the Slack app settings:
 
-1. Set the OAuth redirect URL to
-   `https://<production-domain>/api/auth/slack/callback`.
+1. Under **OAuth & Permissions → Redirect URLs**, add the exact URL shown in
+   onboarding. For the current Vercel deployment, this is
+   `https://signalmend-mu.vercel.app/api/auth/slack/callback`. Slack requires an
+   exact match, including scheme, hostname, path, and trailing slash. If using a
+   custom domain or Vercel preview, configure that environment's canonical URL
+   and register its corresponding callback separately.
 2. Enable bot scopes `chat:write`, `team:read`, `channels:read`, and
    `groups:read`.
 3. Set the Interactivity request URL to

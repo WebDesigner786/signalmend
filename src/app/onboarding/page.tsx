@@ -93,6 +93,14 @@ interface SlackStatus {
   verificationError: string | null;
 }
 
+interface SlackOAuthSetup {
+  configured: boolean;
+  redirectUri: string | null;
+  interactivityUrl: string | null;
+  scopes: string[];
+  error: string | null;
+}
+
 function getErrorMessage(body: unknown, fallback: string): string {
   if (
     typeof body === "object" &&
@@ -129,6 +137,20 @@ function isSlackStatus(value: unknown): value is SlackStatus {
     (typeof record.verifiedAt === "string" || record.verifiedAt === null) &&
     (typeof record.verificationError === "string" ||
       record.verificationError === null)
+  );
+}
+
+function isSlackOAuthSetup(value: unknown): value is SlackOAuthSetup {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.configured === "boolean" &&
+    (typeof record.redirectUri === "string" || record.redirectUri === null) &&
+    (typeof record.interactivityUrl === "string" ||
+      record.interactivityUrl === null) &&
+    Array.isArray(record.scopes) &&
+    record.scopes.every((scope) => typeof scope === "string") &&
+    (typeof record.error === "string" || record.error === null)
   );
 }
 
@@ -392,6 +414,9 @@ export default function OnboardingPage() {
   const [error, setError] = useState("");
   const [statusError, setStatusError] = useState("");
   const [slackStatus, setSlackStatus] = useState<SlackStatus | null>(null);
+  const [slackSetup, setSlackSetup] = useState<SlackOAuthSetup | null>(null);
+  const [slackSetupLoading, setSlackSetupLoading] = useState(false);
+  const [slackSetupError, setSlackSetupError] = useState("");
 
   const authenticated = sessionStatus === "authenticated" && Boolean(session?.user?.id);
   const verified = slackStatus?.verificationStatus === "verified";
@@ -402,6 +427,12 @@ export default function OnboardingPage() {
     const nextDark = savedTheme ? savedTheme === "dark" : prefersDark;
     setDarkMode(nextDark);
     document.documentElement.classList.toggle("dark", nextDark);
+  }, []);
+
+  useEffect(() => {
+    const resetConnectingState = () => setConnectingSlack(false);
+    window.addEventListener("pageshow", resetConnectingState);
+    return () => window.removeEventListener("pageshow", resetConnectingState);
   }, []);
 
   const toggleTheme = () => {
@@ -510,6 +541,7 @@ export default function OnboardingPage() {
     const savedTenant = window.sessionStorage.getItem(TENANT_STORAGE_KEY);
     const nextTenant = returnedTenant ?? savedTenant;
     const result = query.get("slack");
+    const reason = query.get("reason");
 
     if (nextTenant && workspaces.some((workspace) => workspace.tenantId === nextTenant)) {
       setTenantId(nextTenant);
@@ -525,11 +557,66 @@ export default function OnboardingPage() {
       setError("Slack authorization was canceled. You can connect whenever you’re ready.");
     } else if (result === "failed") {
       setStatusError("Slack verification did not complete. Reconnect to try again.");
+    } else if (result === "error") {
+      setError(
+        reason === "redirect_uri_mismatch"
+          ? "Slack rejected the callback URL. Add the exact Redirect URL shown below to your Slack app under OAuth & Permissions."
+          : `Slack authorization failed${reason ? ` (${reason})` : ""}. Check the Slack app settings shown below.`,
+      );
     }
     if (window.location.search) {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [authenticated, workspaces, workspacesLoaded]);
+
+  useEffect(() => {
+    if (!authenticated || step !== 3) return;
+    let active = true;
+    const loadSetup = async () => {
+      setSlackSetupLoading(true);
+      setSlackSetupError("");
+      try {
+        const response = await fetch("/api/auth/slack/start", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        });
+        const body: unknown = await response.json().catch(() => null);
+        if (
+          !isSlackOAuthSetup(body) &&
+          !(typeof body === "object" && body !== null && "error" in body)
+        ) {
+          throw new Error("Slack setup check returned an unexpected response.");
+        }
+        if (!isSlackOAuthSetup(body)) {
+          const record = body as Record<string, unknown>;
+          setSlackSetupError(
+            typeof record.error === "string"
+              ? record.error
+              : "Slack setup could not be checked.",
+          );
+          return;
+        }
+        if (active) {
+          setSlackSetup(body);
+          if (body.error) setSlackSetupError(body.error);
+        }
+      } catch (caught) {
+        if (active) {
+          setSlackSetupError(
+            caught instanceof Error
+              ? caught.message
+              : "Slack setup could not be checked.",
+          );
+        }
+      } finally {
+        if (active) setSlackSetupLoading(false);
+      }
+    };
+    void loadSetup();
+    return () => {
+      active = false;
+    };
+  }, [authenticated, step]);
 
   useEffect(() => {
     if (step !== 3 || !tenantId || !authenticated) return;
@@ -634,8 +721,19 @@ export default function OnboardingPage() {
       });
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
+        const message = getErrorMessage(
+          body,
+          "Slack authorization could not be started.",
+        );
+        const canonicalUrl =
+          typeof body === "object" &&
+          body !== null &&
+          "canonicalUrl" in body &&
+          typeof body.canonicalUrl === "string"
+            ? body.canonicalUrl
+            : null;
         throw new Error(
-          getErrorMessage(body, "Slack authorization could not be started."),
+          canonicalUrl ? `${message} Open ${canonicalUrl} and try again.` : message,
         );
       }
       if (
@@ -978,6 +1076,53 @@ export default function OnboardingPage() {
                         </p>
                       </div>
 
+                      <section className="mt-4 rounded-2xl border border-accent/20 bg-accent/[0.04] p-4 text-[10px] leading-5 text-muted">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-ink">
+                            Slack app settings required
+                          </p>
+                          <a
+                            href="https://api.slack.com/apps"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-semibold text-accent underline underline-offset-2"
+                          >
+                            Open Slack app settings
+                          </a>
+                        </div>
+                        {slackSetupLoading ? (
+                          <p className="mt-2">Checking the callback configuration…</p>
+                        ) : null}
+                        {slackSetupError ? (
+                          <p role="alert" className="mt-2 text-rose-500">
+                            {slackSetupError}
+                          </p>
+                        ) : null}
+                        {slackSetup?.redirectUri ? (
+                          <p className="mt-2">
+                            Under <strong>OAuth &amp; Permissions → Redirect URLs</strong>,
+                            add exactly:{" "}
+                            <code className="break-all rounded bg-canvas px-1.5 py-0.5 text-ink">
+                              {slackSetup.redirectUri}
+                            </code>
+                          </p>
+                        ) : null}
+                        {slackSetup?.interactivityUrl ? (
+                          <p className="mt-2">
+                            Under <strong>Interactivity &amp; Shortcuts</strong>, set the
+                            request URL to:{" "}
+                            <code className="break-all rounded bg-canvas px-1.5 py-0.5 text-ink">
+                              {slackSetup.interactivityUrl}
+                            </code>
+                          </p>
+                        ) : null}
+                        {slackSetup?.scopes.length ? (
+                          <p className="mt-2">
+                            Required bot scopes: {slackSetup.scopes.join(", ")}.
+                          </p>
+                        ) : null}
+                      </section>
+
                       {error ? (
                         <p role="alert" className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs leading-5 text-rose-500">
                           {error}
@@ -1033,7 +1178,11 @@ export default function OnboardingPage() {
                           <button
                             type="button"
                             onClick={() => void connectSlack()}
-                            disabled={connectingSlack || !tenantId}
+                            disabled={
+                              connectingSlack ||
+                              !tenantId ||
+                              slackSetup?.configured === false
+                            }
                             className="group inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#4A154B] px-5 py-3.5 text-xs font-semibold text-white shadow-lg shadow-purple-950/20 transition hover:bg-[#5b1d5d] disabled:cursor-wait disabled:opacity-60"
                           >
                             {connectingSlack ? (

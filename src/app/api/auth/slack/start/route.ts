@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 import { env } from "../../../../../config/env";
 import { getAuthenticatedUserId } from "../../../../../lib/server/auth-session";
 import {
+  getSlackOAuthConfiguration,
+  REQUIRED_SLACK_SCOPES,
+} from "../../../../../lib/server/slackOAuthConfig";
+import {
   createSlackOAuthState,
 } from "../../../../../lib/server/slackOAuthState";
 import { withTenantContext } from "../../../../../lib/server/tenantRls";
@@ -14,11 +18,46 @@ const RequestSchema = z.object({
   tenantId: z.string().uuid(),
 });
 
+export async function GET(): Promise<NextResponse> {
+  const configuration = getSlackOAuthConfiguration();
+  const appOrigin = configuration.redirectUri
+    ? new URL(configuration.redirectUri).origin
+    : null;
+
+  return NextResponse.json(
+    {
+      configured: configuration.ok,
+      redirectUri: configuration.redirectUri,
+      interactivityUrl: appOrigin
+        ? new URL("/api/v1/integrations/slack/actions", appOrigin).toString()
+        : null,
+      scopes: REQUIRED_SLACK_SCOPES,
+      error: configuration.ok ? null : configuration.error,
+    },
+    {
+      status: configuration.ok ? 200 : 503,
+      headers: { "cache-control": "no-store" },
+    },
+  );
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
-  if (!env.slackClientId || !env.slackClientSecret || !env.slackRedirectUri) {
+  const configuration = getSlackOAuthConfiguration();
+  if (!configuration.ok) {
     return NextResponse.json(
-      { error: "Slack OAuth is not configured" },
+      { error: configuration.error, redirectUri: configuration.redirectUri },
       { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  const redirectUri = new URL(configuration.redirectUri);
+  if (new URL(request.url).origin !== redirectUri.origin) {
+    return NextResponse.json(
+      {
+        error: `Open SignalMend at ${redirectUri.origin} before connecting Slack.`,
+        canonicalUrl: redirectUri.origin,
+      },
+      { status: 409, headers: { "cache-control": "no-store" } },
     );
   }
 
@@ -80,12 +119,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const authorizeUrl = new URL("https://slack.com/oauth/v2/authorize");
-    authorizeUrl.searchParams.set("client_id", env.slackClientId);
+    authorizeUrl.searchParams.set("client_id", configuration.clientId);
     authorizeUrl.searchParams.set(
       "scope",
-      "chat:write,team:read,channels:read,groups:read",
+      REQUIRED_SLACK_SCOPES.join(","),
     );
-    authorizeUrl.searchParams.set("redirect_uri", env.slackRedirectUri);
+    authorizeUrl.searchParams.set("redirect_uri", configuration.redirectUri);
     authorizeUrl.searchParams.set("state", state.token);
 
     return NextResponse.json(

@@ -4,6 +4,10 @@ import { Prisma } from "@prisma/client";
 
 import { env } from "../../../../../config/env";
 import { withTenantContext } from "../../../../../lib/server/tenantRls";
+import {
+  getSlackOAuthConfiguration,
+  REQUIRED_SLACK_SCOPES,
+} from "../../../../../lib/server/slackOAuthConfig";
 import { verifySlackOAuthState } from "../../../../../lib/server/slackOAuthState";
 import {
   markSlackHandshakeFailed,
@@ -26,12 +30,6 @@ const SlackOAuthResponseSchema = z.object({
   }),
 });
 
-const REQUIRED_SLACK_SCOPES = [
-  "chat:write",
-  "team:read",
-  "channels:read",
-  "groups:read",
-] as const;
 const consumeNonceScript = `
   if redis.call("GET", KEYS[1]) == ARGV[1] then
     return redis.call("DEL", KEYS[1])
@@ -52,13 +50,27 @@ function getSingleParameter(url: URL, name: string): string | null {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  if (!env.slackClientId || !env.slackClientSecret || !env.slackRedirectUri) {
-    return jsonError("Slack OAuth is not configured", 503);
+  const configuration = getSlackOAuthConfiguration();
+  if (!configuration.ok) {
+    return jsonError(configuration.error, 503);
   }
 
   const callbackUrl = new URL(request.url);
-  if (callbackUrl.searchParams.has("error")) {
-    const onboardingUrl = new URL("/onboarding?slack=declined", callbackUrl.origin);
+  const redirectUri = new URL(configuration.redirectUri);
+  if (callbackUrl.origin !== redirectUri.origin) {
+    return jsonError("Slack callback arrived on a non-canonical application URL", 400);
+  }
+
+  const oauthError = getSingleParameter(callbackUrl, "error");
+  if (oauthError) {
+    const onboardingUrl = new URL("/onboarding", redirectUri.origin);
+    onboardingUrl.searchParams.set(
+      "slack",
+      oauthError === "access_denied" ? "declined" : "error",
+    );
+    if (oauthError !== "access_denied" && /^[A-Za-z0-9_]{1,128}$/.test(oauthError)) {
+      onboardingUrl.searchParams.set("reason", oauthError);
+    }
     return NextResponse.redirect(onboardingUrl, {
       status: 303,
       headers: { "cache-control": "no-store" },
@@ -131,10 +143,10 @@ export async function GET(request: Request): Promise<NextResponse> {
   let slackResponse: Response;
   try {
     const form = new URLSearchParams({
-      client_id: env.slackClientId,
-      client_secret: env.slackClientSecret,
+      client_id: configuration.clientId,
+      client_secret: configuration.clientSecret,
       code,
-      redirect_uri: env.slackRedirectUri,
+      redirect_uri: configuration.redirectUri,
     });
     slackResponse = await fetch("https://slack.com/api/oauth.v2.access", {
       method: "POST",
@@ -163,15 +175,49 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
   const parsedSlackResponse = SlackOAuthResponseSchema.safeParse(slackBody);
   if (!slackResponse.ok || !parsedSlackResponse.success) {
-    return jsonError("Slack token exchange was rejected", 502);
+    const errorCode =
+      typeof slackBody === "object" &&
+      slackBody !== null &&
+      "error" in slackBody &&
+      typeof slackBody.error === "string"
+        ? slackBody.error
+        : null;
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "slack_oauth_exchange_rejected",
+        httpStatus: slackResponse.status,
+        errorCode,
+      }),
+    );
+    return jsonError(
+      errorCode
+        ? `Slack rejected the token exchange (${errorCode})`
+        : "Slack returned an invalid token response",
+      502,
+    );
   }
 
   const slack = parsedSlackResponse.data;
   const grantedScopes = [...new Set(slack.scope.split(",").map((scope) => scope.trim()))]
     .filter(Boolean)
     .sort();
-  if (REQUIRED_SLACK_SCOPES.some((scope) => !grantedScopes.includes(scope))) {
-    return jsonError("Slack did not grant the required integration permissions", 403);
+  const missingScopes = REQUIRED_SLACK_SCOPES.filter(
+    (scope) => !grantedScopes.includes(scope),
+  );
+  if (missingScopes.length > 0) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "slack_oauth_scopes_missing",
+        tenantId: state.tenantId,
+        missingScopes,
+      }),
+    );
+    return jsonError(
+      `Slack did not grant required permissions: ${missingScopes.join(", ")}. Reinstall the app after updating its bot scopes.`,
+      403,
+    );
   }
 
   const vault = new VaultService();
