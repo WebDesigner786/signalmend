@@ -25,6 +25,7 @@ const BillingEventSchema = z.object({
     type: z.string().optional(),
     attributes: z.object({
       customer_id: z.union([z.string().min(1), z.number().int().positive()]),
+      variant_id: z.union([z.string().min(1), z.number().int().positive()]).optional(),
       variant_name: z.string().min(1).max(255).optional(),
       status: z.string().min(1).max(64),
     }).passthrough(),
@@ -36,6 +37,7 @@ interface BillingEvent {
   customerId: string;
   workspaceId: string | undefined;
   subscriptionId: string;
+  variantId: string | undefined;
   variantName: string | undefined;
   status: string;
 }
@@ -74,6 +76,10 @@ function decodeBillingEvent(payload: z.infer<typeof BillingEventSchema>): Billin
     workspaceId:
       typeof workspaceIdValue === "string" ? workspaceIdValue : undefined,
     subscriptionId: payload.data.id,
+    variantId:
+      payload.data.attributes.variant_id === undefined
+        ? undefined
+        : String(payload.data.attributes.variant_id),
     variantName: payload.data.attributes.variant_name,
     status: payload.data.attributes.status.toLowerCase(),
   };
@@ -104,6 +110,20 @@ function tierForEvent(event: BillingEvent): SubscriptionTier | null {
     return SubscriptionTier.free;
   }
   if (["active", "trialing", "on_trial"].includes(event.status)) {
+    if (
+      event.variantId &&
+      env.lemonSqueezyProVariantId &&
+      event.variantId === env.lemonSqueezyProVariantId
+    ) {
+      return SubscriptionTier.pro;
+    }
+    if (
+      event.variantId &&
+      env.lemonSqueezyEnterpriseVariantId &&
+      event.variantId === env.lemonSqueezyEnterpriseVariantId
+    ) {
+      return SubscriptionTier.enterprise;
+    }
     return tierForVariantName(event.variantName);
   }
   if (["cancelled", "expired", "past_due", "unpaid", "paused", "on_trial_expired"].includes(event.status)) {

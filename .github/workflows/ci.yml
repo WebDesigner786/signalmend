@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/signalmend?schema=public
+      REDIS_URL: redis://localhost:6379
+      ENCRYPTION_SECRET: ci-encryption-secret-with-at-least-32-bytes
+      SLACK_SIGNING_SECRET: ci-slack-signing-secret
+      DASHBOARD_JWT_SECRET: ci-dashboard-jwt-secret-with-at-least-32-characters
+      NEXTAUTH_SECRET: ci-nextauth-secret-with-at-least-32-characters
+      LEMON_SQUEEZY_WEBHOOK_SECRET: ci-lemon-squeezy-webhook-secret
+      NEXTAUTH_URL: https://signalmend.example
+      NEXT_PUBLIC_SITE_URL: https://signalmend.example
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build

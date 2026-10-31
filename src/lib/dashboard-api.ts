@@ -46,7 +46,9 @@ export async function dashboardFetch<T>(
       ...options,
       headers: {
         accept: "application/json",
-        authorization: `Bearer ${session.token}`,
+        ...(session.token
+          ? { authorization: `Bearer ${session.token}` }
+          : {}),
         ...(options.body ? { "content-type": "application/json" } : {}),
         ...options.headers,
       },

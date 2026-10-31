@@ -300,6 +300,18 @@ export async function sendIncidentAlert(
   return { channelId, messageTimestamp: result.ts };
 }
 
+export async function sendSlackTestMessage(
+  integration: Integration,
+): Promise<void> {
+  const channelId = getChannelId(integration);
+  await callSlackApi("chat.postMessage", getAccessToken(integration), {
+    channel: channelId,
+    text: "SignalMend test notification — Slack incident alerts are connected.",
+    unfurl_links: false,
+    unfurl_media: false,
+  });
+}
+
 export async function updateIncidentMessage(
   integration: Integration,
   incident: SlackIncidentView,

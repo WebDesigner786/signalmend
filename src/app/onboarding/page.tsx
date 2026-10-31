@@ -1050,6 +1050,13 @@ export default function OnboardingPage() {
                             )}
                           </button>
                         ) : null}
+                        <a
+                          href={verified ? "/dashboard/integrations" : "/dashboard"}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/25 bg-accent/5 px-4 py-3 text-xs font-semibold text-accent transition hover:bg-accent/10"
+                        >
+                          {verified ? "Choose Slack alert channel" : "Continue to dashboard"}
+                          <ArrowRight size={14} />
+                        </a>
                       </div>
                       <p className="mt-4 text-center text-[10px] leading-5 text-muted">
                         You’ll approve access on Slack. Your password is never

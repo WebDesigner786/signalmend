@@ -91,6 +91,22 @@ const environmentProperties = {
     envNames: ["LEMON_SQUEEZY_WEBHOOK_SECRET", "LEMONSQUEEZY_WEBHOOK_SECRET"],
     schema: z.string().trim().min(1),
   },
+  lemonSqueezyApiKey: {
+    envNames: ["LEMON_SQUEEZY_API_KEY"],
+    schema: z.string().trim().min(1).optional(),
+  },
+  lemonSqueezyStoreId: {
+    envNames: ["LEMON_SQUEEZY_STORE_ID"],
+    schema: z.string().trim().min(1).optional(),
+  },
+  lemonSqueezyProVariantId: {
+    envNames: ["LEMON_SQUEEZY_PRO_VARIANT_ID"],
+    schema: z.string().trim().min(1).optional(),
+  },
+  lemonSqueezyEnterpriseVariantId: {
+    envNames: ["LEMON_SQUEEZY_ENTERPRISE_VARIANT_ID"],
+    schema: z.string().trim().min(1).optional(),
+  },
 } as const;
 
 export type Environment = {

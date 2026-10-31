@@ -33,27 +33,43 @@ export const authOptions: NextAuthOptions = {
         const parsed = CredentialsSchema.safeParse(credentials);
         if (!parsed.success) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: parsed.data.email.toLowerCase() },
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            passwordHash: true,
-          },
-        });
-        if (
-          !user?.passwordHash ||
-          !(await compare(parsed.data.password, user.passwordHash))
-        ) {
+        let failureStage:
+          | "user_lookup"
+          | "password_verification" = "user_lookup";
+        try {
+          const user = await prisma.user.findUnique({
+            where: { email: parsed.data.email.toLowerCase() },
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              passwordHash: true,
+            },
+          });
+          if (!user?.passwordHash) return null;
+
+          failureStage = "password_verification";
+          const isValidPassword = await compare(
+            parsed.data.password,
+            user.passwordHash,
+          );
+          if (!isValidPassword) return null;
+
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+          };
+        } catch (error) {
+          console.error("[Auth Error] Credentials authorization failed.", {
+            stage: failureStage,
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unknown credentials authorization error",
+          });
           return null;
         }
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-        };
       },
     }),
   ],

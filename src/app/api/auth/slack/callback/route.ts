@@ -26,7 +26,12 @@ const SlackOAuthResponseSchema = z.object({
   }),
 });
 
-const REQUIRED_SLACK_SCOPES = ["chat:write", "team:read"] as const;
+const REQUIRED_SLACK_SCOPES = [
+  "chat:write",
+  "team:read",
+  "channels:read",
+  "groups:read",
+] as const;
 const consumeNonceScript = `
   if redis.call("GET", KEYS[1]) == ARGV[1] then
     return redis.call("DEL", KEYS[1])

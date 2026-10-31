@@ -47,7 +47,7 @@ const plans = [
     name: "Developer",
     price: "Free",
     description: "For side projects and your first production signals.",
-    features: ["1,000 webhooks / month", "2 endpoints", "1 workspace", "7-day retention"],
+    features: ["1,000 webhooks / month", "2 signed endpoints", "30 requests / minute", "Slack incident alerts"],
     action: "Start for free",
   },
   {
@@ -55,7 +55,7 @@ const plans = [
     price: "$29",
     cadence: "/ month",
     description: "For teams that need more coverage without more overhead.",
-    features: ["50,000 webhooks / month", "15 endpoints", "3 workspaces", "90-day retention"],
+    features: ["50,000 webhooks / month", "15 signed endpoints", "300 requests / minute", "Incident routing rules"],
     action: "Get started",
     featured: true,
   },
@@ -64,7 +64,7 @@ const plans = [
     price: "$79",
     cadence: "/ month",
     description: "For high-volume operations and longer audit windows.",
-    features: ["500,000 webhooks / month", "Unlimited endpoints", "365-day retention", "Priority support"],
+    features: ["500,000 webhooks / month", "Unlimited endpoints", "3,000 requests / minute", "Incident routing rules"],
     action: "Talk to us",
   },
 ];

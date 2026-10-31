@@ -111,7 +111,7 @@ function EndpointSkeleton() {
 }
 
 export default function EndpointsPage() {
-  const { token, workspaceId } = useDashboardSession();
+  const { token, workspaceId, authenticated } = useDashboardSession();
   const [endpoints, setEndpoints] = useState<WebhookEndpoint[]>([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
@@ -123,7 +123,7 @@ export default function EndpointsPage() {
   const [copied, setCopied] = useState("");
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!authenticated) {
       return;
     }
     setLoading(true);
@@ -146,7 +146,7 @@ export default function EndpointsPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, workspaceId]);
+  }, [token, workspaceId, authenticated]);
 
   useEffect(() => {
     void refresh();

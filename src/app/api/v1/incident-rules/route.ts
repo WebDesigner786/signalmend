@@ -32,7 +32,7 @@ const ActionsSchema = z
     severity: z.enum(["critical", "warning", "info"]).optional(),
     delivery: z
       .object({
-        provider: z.enum(["slack", "discord"]),
+        provider: z.literal("slack"),
         target: z.string().min(1).max(2_048),
       })
       .optional(),

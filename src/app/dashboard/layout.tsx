@@ -12,7 +12,6 @@ import {
   Command,
   CreditCard,
   Gauge,
-  KeyRound,
   Layers3,
   LogOut,
   Menu,
@@ -54,14 +53,19 @@ const PRIMARY_NAVIGATION = [
   { label: "Overview", href: "/dashboard", icon: Gauge },
   { label: "Endpoints", href: "/dashboard/endpoints", icon: Radio },
   { label: "Incident rules", href: "/dashboard/rules", icon: Workflow },
+  { label: "Integrations", href: "/dashboard/integrations", icon: Layers3 },
 ] as const;
 
-function useWorkspaceMetrics(token: string, workspaceId: string) {
+function useWorkspaceMetrics(
+  token: string,
+  workspaceId: string,
+  authenticated: boolean,
+) {
   const [data, setData] = useState<WorkspaceMetricsResponse | null>(null);
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!authenticated) {
       setData(null);
       setError("");
       return;
@@ -81,7 +85,7 @@ function useWorkspaceMetrics(token: string, workspaceId: string) {
           : "Workspace usage could not be loaded",
       );
     }
-  }, [token, workspaceId]);
+  }, [token, workspaceId, authenticated]);
 
   useEffect(() => {
     void refresh();
@@ -93,9 +97,7 @@ function useWorkspaceMetrics(token: string, workspaceId: string) {
 }
 
 function AccessGate() {
-  const { ready, token, setToken } = useDashboardSession();
-  const [tokenInput, setTokenInput] = useState("");
-  const [error, setError] = useState("");
+  const { ready, authenticated } = useDashboardSession();
 
   if (!ready) {
     return (
@@ -107,64 +109,28 @@ function AccessGate() {
       </div>
     );
   }
-  if (token) {
+  if (authenticated) {
     return null;
   }
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (tokenInput.trim().length < 20) {
-      setError("Enter a valid dashboard access token to continue.");
-      return;
-    }
-    setError("");
-    setToken(tokenInput.trim());
-    setTokenInput("");
-  };
 
   return (
     <main className="grid min-h-screen place-items-center px-5 py-12">
       <section className="w-full max-w-md rounded-3xl border border-line bg-surface/80 p-7 shadow-2xl shadow-black/10 backdrop-blur-2xl">
-        <div className="mb-7 flex h-12 w-12 items-center justify-center rounded-2xl border border-accent/20 bg-accent/10 text-accent shadow-glow">
-          <ShieldCheck size={22} />
-        </div>
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
-          SignalMend secure session
+          SignalMend
         </p>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-ink">
-          Connect your workspace
+          Sign in to your workspace
         </h1>
         <p className="mt-2 text-sm leading-6 text-muted">
-          Paste a dashboard bearer token issued by your identity provider. It is
-          kept in this browser tab session only.
+          Sign in or create an account to open your incident dashboard.
         </p>
-        <form className="mt-6 space-y-3" onSubmit={submit}>
-          <label className="sr-only" htmlFor="dashboard-token">
-            Dashboard bearer token
-          </label>
-          <textarea
-            id="dashboard-token"
-            autoComplete="off"
-            spellCheck={false}
-            value={tokenInput}
-            onChange={(event) => setTokenInput(event.target.value)}
-            placeholder="Paste access token"
-            className="min-h-28 w-full resize-y rounded-xl border border-line bg-canvas/80 px-4 py-3 font-mono text-xs text-ink placeholder:text-muted/70"
-          />
-          {error ? (
-            <p role="alert" className="text-xs text-rose-500">{error}</p>
-          ) : null}
-          <button
-            type="submit"
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:brightness-110"
-          >
-            Continue securely <ArrowUpRight size={16} />
-          </button>
-        </form>
-        <p className="mt-5 flex items-start gap-2 text-[11px] leading-5 text-muted">
-          <KeyRound className="mt-0.5 shrink-0" size={13} />
-          Session tokens are cleared when you sign out or close this browser tab.
-        </p>
+        <Link
+          href="/onboarding"
+          className="mt-6 flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:brightness-110"
+        >
+          Continue to sign in <ArrowUpRight size={16} />
+        </Link>
       </section>
     </main>
   );
@@ -364,8 +330,8 @@ function UsageMeter({
 
 function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
-  const { ready, token, workspaceId, setWorkspaceId, signOut } = useDashboardSession();
-  const { data, error } = useWorkspaceMetrics(token, workspaceId);
+  const { ready, authenticated, token, workspaceId, setWorkspaceId, signOut } = useDashboardSession();
+  const { data, error } = useWorkspaceMetrics(token, workspaceId, authenticated);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
@@ -387,7 +353,7 @@ function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
         : "Developer"
     : "Plan";
 
-  if (!ready || !token) {
+  if (!ready || !authenticated) {
     return <AccessGate />;
   }
 
@@ -475,18 +441,17 @@ function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
           System
         </div>
         <div className="space-y-1">
-          <span className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-medium text-muted/60">
-            <Layers3 size={16} /> Integrations
-            <span className="ml-auto rounded bg-ink/5 px-1.5 py-0.5 text-[8px] uppercase tracking-wide dark:bg-white/5">
-              Soon
-            </span>
-          </span>
-          <span className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-medium text-muted/60">
+          <Link
+            href="/dashboard/billing"
+            aria-current={pathname === "/dashboard/billing" ? "page" : undefined}
+            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-medium transition ${
+              pathname === "/dashboard/billing"
+                ? "bg-accent/10 text-accent"
+                : "text-muted hover:bg-ink/5 hover:text-ink dark:hover:bg-white/5"
+            }`}
+          >
             <CreditCard size={16} /> Billing
-            <span className="ml-auto rounded bg-ink/5 px-1.5 py-0.5 text-[8px] uppercase tracking-wide dark:bg-white/5">
-              Soon
-            </span>
-          </span>
+          </Link>
         </div>
 
         <div className="mt-auto">

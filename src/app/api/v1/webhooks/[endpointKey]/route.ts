@@ -12,7 +12,7 @@ import { getRedisClient, type JsonValue, type WebhookProcessingJob } from "../..
 import { prisma } from "../../../../../utils/prisma";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 10;
 
 const BODY_LIMIT_BYTES = 1_048_576;
 const IDEMPOTENCY_TTL_SECONDS = 86_400;

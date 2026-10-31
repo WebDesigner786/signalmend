@@ -81,7 +81,10 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const authorizeUrl = new URL("https://slack.com/oauth/v2/authorize");
     authorizeUrl.searchParams.set("client_id", env.slackClientId);
-    authorizeUrl.searchParams.set("scope", "chat:write,team:read");
+    authorizeUrl.searchParams.set(
+      "scope",
+      "chat:write,team:read,channels:read,groups:read",
+    );
     authorizeUrl.searchParams.set("redirect_uri", env.slackRedirectUri);
     authorizeUrl.searchParams.set("state", state.token);
 

@@ -391,13 +391,13 @@ function IncidentTable({
 }
 
 export default function DashboardPage() {
-  const { token, workspaceId } = useDashboardSession();
+  const { token, workspaceId, authenticated } = useDashboardSession();
   const [timeframe, setTimeframe] = useState<Timeframe>("24h");
   const [state, setState] = useState<DashboardState>(INITIAL_STATE);
 
   const refresh = useCallback(
     async (initial = false) => {
-      if (!token) {
+      if (!authenticated) {
         return;
       }
       setState((current) => ({
@@ -437,7 +437,7 @@ export default function DashboardPage() {
         }));
       }
     },
-    [token, workspaceId],
+    [token, workspaceId, authenticated],
   );
 
   useEffect(() => {

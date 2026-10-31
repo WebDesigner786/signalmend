@@ -4,7 +4,6 @@ import {
   ArrowDown,
   ArrowRight,
   Braces,
-  Check,
   ChevronDown,
   CircleHelp,
   Plus,
@@ -15,14 +14,13 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { dashboardFetch } from "../../../lib/dashboard-api";
 import { useDashboardSession } from "../../../lib/dashboard-session";
 
 type RuleOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
 type RuleField = "severity" | "http_status" | "service" | "environment" | "error.message";
-type DeliveryProvider = "slack" | "discord";
 
 interface ConditionRow {
   id: string;
@@ -53,8 +51,6 @@ interface RuleForm {
   severity: "critical" | "warning" | "info";
   match: "all" | "any";
   conditions: ConditionRow[];
-  provider: DeliveryProvider;
-  target: string;
 }
 
 const FIELD_LABELS: Record<RuleField, string> = {
@@ -84,8 +80,6 @@ const EMPTY_FORM: RuleForm = {
   conditions: [
     { id: "condition-1", path: "severity", operator: "eq", value: "error" },
   ],
-  provider: "slack",
-  target: "",
 };
 
 function isRule(value: unknown): value is IncidentRule {
@@ -124,31 +118,6 @@ function parseRuleConditions(form: RuleForm): Array<{ path: string; operator: Ru
   });
 }
 
-function validateTarget(provider: DeliveryProvider, target: string): string {
-  const trimmed = target.trim();
-  if (!trimmed) {
-    return "A notification destination is required.";
-  }
-  if (provider === "slack") {
-    return /^#?[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(trimmed)
-      ? ""
-      : "Enter a Slack channel name such as #war-room.";
-  }
-  try {
-    const url = new URL(trimmed);
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== "discord.com" ||
-      !/^\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+\/?$/.test(url.pathname)
-    ) {
-      return "Enter a valid HTTPS Discord webhook URL.";
-    }
-    return "";
-  } catch {
-    return "Enter a valid HTTPS Discord webhook URL.";
-  }
-}
-
 function formatRule(rule: IncidentRule): string {
   const conditions = rule.conditions;
   if (typeof conditions !== "object" || conditions === null) {
@@ -181,20 +150,15 @@ function formatRule(rule: IncidentRule): string {
 }
 
 export default function RulesPage() {
-  const { token, workspaceId } = useDashboardSession();
+  const { token, workspaceId, authenticated } = useDashboardSession();
   const [rules, setRules] = useState<IncidentRule[]>([]);
   const [form, setForm] = useState<RuleForm>(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const targetError = useMemo(
-    () => validateTarget(form.provider, form.target),
-    [form.provider, form.target],
-  );
-
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!authenticated) {
       return;
     }
     setLoading(true);
@@ -217,7 +181,7 @@ export default function RulesPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, workspaceId]);
+  }, [token, workspaceId, authenticated]);
 
   useEffect(() => {
     void refresh();
@@ -276,11 +240,6 @@ export default function RulesPage() {
       setError("Complete each condition and use a numeric value for HTTP status.");
       return;
     }
-    if (targetError) {
-      setError(targetError);
-      return;
-    }
-
     setSaving(true);
     setError("");
     setSuccess("");
@@ -300,10 +259,6 @@ export default function RulesPage() {
             actions: {
               title: title || undefined,
               severity: form.severity,
-              delivery: {
-                provider: form.provider,
-                target: form.target.trim(),
-              },
             },
           }),
         },
@@ -502,41 +457,6 @@ export default function RulesPage() {
                   <option value="info">Info</option>
                 </select>
               </div>
-              <div>
-                <label htmlFor="rule-provider" className="mb-1.5 block text-[11px] font-medium text-muted">Notification destination</label>
-                <select
-                  id="rule-provider"
-                  value={form.provider}
-                  onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value as DeliveryProvider, target: "" }))}
-                  className="w-full rounded-xl border border-line bg-canvas/70 px-3.5 py-2.5 text-xs text-ink"
-                >
-                  <option value="slack">Slack channel</option>
-                  <option value="discord">Discord webhook</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="rule-target" className="mb-1.5 block text-[11px] font-medium text-muted">
-                {form.provider === "slack" ? "Slack channel" : "Discord webhook URL"}
-              </label>
-              <input
-                id="rule-target"
-                value={form.target}
-                onChange={(event) => setForm((current) => ({ ...current, target: event.target.value }))}
-                placeholder={form.provider === "slack" ? "#war-room" : "https://discord.com/api/webhooks/…"}
-                className={`w-full rounded-xl border bg-canvas/70 px-3.5 py-2.5 text-xs text-ink placeholder:text-muted/70 ${
-                  form.target && targetError ? "border-rose-500/50" : "border-line"
-                }`}
-              />
-              <div className="mt-1.5 flex items-center justify-between gap-2">
-                <p className={`text-[10px] ${targetError && form.target ? "text-rose-500" : "text-muted"}`}>
-                  {targetError || (form.provider === "discord"
-                    ? "HTTPS Discord webhook URL is validated locally before save."
-                    : "Enter a channel name; connect the matching Slack integration in settings.")}
-                </p>
-                {form.target && !targetError ? <Check size={13} className="shrink-0 text-emerald-500" /> : null}
-              </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line/70 pt-4">
@@ -546,7 +466,7 @@ export default function RulesPage() {
               </p>
               <button
                 type="submit"
-                disabled={saving || Boolean(targetError)}
+                disabled={saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-accent/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />}
@@ -565,7 +485,7 @@ export default function RulesPage() {
             <div className="mt-4 rounded-xl border border-line bg-canvas/70 p-3.5 font-mono text-[10px] leading-5 text-muted">
               <p><span className="text-violet-400">IF</span> {form.conditions.map((condition) => `${condition.path} ${condition.operator} ${condition.value || "…"}`).join(form.match === "all" ? " AND " : " OR ")}</p>
               <p className="mt-1"><span className="text-amber-400">THEN</span> create <span className="text-rose-400">{form.severity}</span> incident</p>
-              <p className="mt-1"><span className="text-cyan-400">ROUTE</span> to {form.provider === "slack" ? "Slack" : "Discord"} {form.target || "destination"}</p>
+              <p className="mt-1"><span className="text-cyan-400">ROUTE</span> to the configured Slack channel</p>
             </div>
             <div className="mt-3 flex items-center gap-2 text-[10px] text-muted">
               <ArrowRight size={12} className="text-accent" />
@@ -575,7 +495,7 @@ export default function RulesPage() {
           <div className="rounded-2xl border border-amber-500/15 bg-amber-500/[0.04] p-4">
             <p className="text-[11px] font-semibold text-ink">Destination note</p>
             <p className="mt-1.5 text-[10px] leading-5 text-muted">
-              New incidents are sent to enabled Slack integrations. Discord delivery is not currently supported.
+              Connect a Slack workspace and configure a channel before enabling alert delivery.
             </p>
           </div>
         </aside>

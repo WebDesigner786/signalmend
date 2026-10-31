@@ -15,6 +15,19 @@ const CreateSchema = z.object({
   signatureHeader: z.string().regex(/^[a-z0-9-]{2,128}$/),
 });
 
+const ENDPOINT_LIMITS = {
+  free: 2,
+  pro: 15,
+  enterprise: Number.POSITIVE_INFINITY,
+} as const;
+
+class WebhookEndpointLimitError extends Error {
+  constructor(readonly limit: number) {
+    super("Webhook endpoint plan limit reached");
+    this.name = "WebhookEndpointLimitError";
+  }
+}
+
 function serializeEndpoint(endpoint: {
   id: string;
   name: string;
@@ -81,34 +94,58 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  const endpointLimit = ENDPOINT_LIMITS[context.workspace.subscriptionTier];
   const endpointKey = randomBytes(24).toString("base64url");
   const secret = randomBytes(32).toString("base64url");
   try {
-    const endpoint = await prisma.inboundWebhook.create({
-      data: {
-        workspaceId: context.workspace.id,
-        name: parsed.data.name,
-        endpointKey,
-        secretKeyEncrypted: encryptSecret(secret),
-        requireSignature: parsed.data.requireSignature,
-        signatureHeader: parsed.data.signatureHeader,
+    const endpoint = await prisma.$transaction(
+      async (transaction) => {
+        if (Number.isFinite(endpointLimit)) {
+          const currentCount = await transaction.inboundWebhook.count({
+            where: { workspaceId: context.workspace.id },
+          });
+          if (currentCount >= endpointLimit) {
+            throw new WebhookEndpointLimitError(endpointLimit);
+          }
+        }
+        return transaction.inboundWebhook.create({
+          data: {
+            workspaceId: context.workspace.id,
+            name: parsed.data.name,
+            endpointKey,
+            secretKeyEncrypted: encryptSecret(secret),
+            requireSignature: parsed.data.requireSignature,
+            signatureHeader: parsed.data.signatureHeader,
+          },
+          select: {
+            id: true,
+            name: true,
+            endpointKey: true,
+            isActive: true,
+            requireSignature: true,
+            signatureHeader: true,
+            totalReceived: true,
+            createdAt: true,
+          },
+        });
       },
-      select: {
-        id: true,
-        name: true,
-        endpointKey: true,
-        isActive: true,
-        requireSignature: true,
-        signatureHeader: true,
-        totalReceived: true,
-        createdAt: true,
-      },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
     return NextResponse.json(
       { endpoint: serializeEndpoint(endpoint), secret },
       { status: 201 },
     );
   } catch (error) {
+    if (error instanceof WebhookEndpointLimitError) {
+      return NextResponse.json(
+        {
+          error: `This plan supports up to ${error.limit} webhook endpoints. Upgrade to add more.`,
+          code: "WEBHOOK_ENDPOINT_LIMIT_REACHED",
+          endpointLimit: error.limit,
+        },
+        { status: 402 },
+      );
+    }
     console.error("Failed to create webhook endpoint", error);
     const status =
       error instanceof Prisma.PrismaClientKnownRequestError ? 503 : 500;

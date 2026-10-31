@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { env } from "../../config/env";
 import { prisma } from "../../utils/prisma";
+import { getAuthenticatedUserId } from "./auth-session";
 
 const DashboardClaimsSchema = z.object({
   sub: z.string().min(1).max(255),
@@ -36,6 +37,13 @@ export async function authenticateDashboardBearer(
 export async function authenticateDashboardIdentity(
   authorization: string | null,
 ): Promise<DashboardIdentity> {
+  if (!authorization) {
+    const userId = await getAuthenticatedUserId();
+    if (userId) {
+      return { userId };
+    }
+  }
+
   const match = authorization?.match(/^Bearer ([A-Za-z0-9_.-]{1,8192})$/);
   if (!match) {
     throw new Error("A valid bearer token is required");
