@@ -11,7 +11,7 @@ import {
 } from "react";
 import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 
-import { dashboardFetch, type DashboardSession } from "./dashboard-api";
+import type { DashboardSession } from "./dashboard-api";
 
 interface DashboardSessionContextValue extends DashboardSession {
   ready: boolean;
@@ -41,9 +41,11 @@ export function DashboardSessionProvider({
 }: Readonly<{ children: ReactNode }>) {
   const { status } = useSession();
   const [workspaceId, setWorkspaceIdState] = useState("");
+  const [workspaceReady, setWorkspaceReady] = useState(false);
 
   useEffect(() => {
     setWorkspaceIdState(readStoredWorkspaceId());
+    setWorkspaceReady(true);
   }, []);
 
   const setWorkspaceId = useCallback((nextWorkspaceId: string) => {
@@ -65,12 +67,12 @@ export function DashboardSessionProvider({
     () => ({
       token: "",
       workspaceId,
-      ready: status !== "loading",
+      ready: status !== "loading" && workspaceReady,
       authenticated: status === "authenticated",
       setWorkspaceId,
       signOut,
     }),
-    [workspaceId, status, setWorkspaceId, signOut],
+    [workspaceId, status, workspaceReady, setWorkspaceId, signOut],
   );
 
   return (
@@ -88,11 +90,4 @@ export function useDashboardSession(): DashboardSessionContextValue {
     );
   }
   return context;
-}
-
-export async function validateWorkspaceAccess(
-  token: string,
-  workspaceId: string,
-): Promise<void> {
-  await dashboardFetch("/api/v1/dashboard/metrics", { token, workspaceId });
 }

@@ -26,8 +26,8 @@ import {
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
 
@@ -35,8 +35,13 @@ import { DashboardApiError, dashboardFetch } from "../../lib/dashboard-api";
 import {
   DashboardSessionProvider,
   useDashboardSession,
-  validateWorkspaceAccess,
 } from "../../lib/dashboard-session";
+
+interface DashboardWorkspace {
+  id: string;
+  name: string;
+  subscriptionTier: string;
+}
 
 interface WorkspaceMetricsResponse {
   workspace: { id: string; name: string };
@@ -65,7 +70,7 @@ function useWorkspaceMetrics(
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
-    if (!authenticated) {
+    if (!authenticated || !workspaceId) {
       setData(null);
       setError("");
       return;
@@ -88,10 +93,18 @@ function useWorkspaceMetrics(
   }, [token, workspaceId, authenticated]);
 
   useEffect(() => {
+    if (!authenticated || !workspaceId) {
+      setData(null);
+      setError("");
+      return;
+    }
+
+    setData(null);
+    setError("");
     void refresh();
     const timer = window.setInterval(() => void refresh(), 30_000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [authenticated, workspaceId, refresh]);
 
   return { data, error, refresh };
 }
@@ -170,40 +183,14 @@ function ThemeToggle() {
 function WorkspaceSwitcher({
   currentName,
   currentId,
+  workspaces,
 }: {
   currentName: string;
   currentId: string;
+  workspaces: DashboardWorkspace[];
 }) {
-  const { token, setWorkspaceId } = useDashboardSession();
+  const { setWorkspaceId } = useDashboardSession();
   const [open, setOpen] = useState(false);
-  const [candidate, setCandidate] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const switchWorkspace = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const nextId = candidate.trim();
-    if (!nextId || nextId === currentId) {
-      setOpen(false);
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await validateWorkspaceAccess(token, nextId);
-      setWorkspaceId(nextId);
-      setOpen(false);
-      setCandidate("");
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Workspace access could not be verified",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <div className="relative">
@@ -238,26 +225,29 @@ function WorkspaceSwitcher({
               <X size={14} className="text-muted" />
             </button>
           </div>
-          <p className="mb-3 text-[11px] leading-5 text-muted">
-            Enter a workspace ID you belong to. SignalMend verifies access before switching.
-          </p>
-          <form onSubmit={switchWorkspace} className="space-y-2">
-            <input
-              value={candidate}
-              onChange={(event) => setCandidate(event.target.value)}
-              placeholder="Workspace UUID"
-              className="w-full rounded-lg border border-line bg-canvas px-3 py-2 font-mono text-[11px] text-ink placeholder:text-muted/70"
-              autoComplete="off"
-            />
-            {error ? <p role="alert" className="text-[11px] text-rose-500">{error}</p> : null}
-            <button
-              type="submit"
-              disabled={busy || !candidate.trim()}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-ink px-3 py-2 text-xs font-semibold text-canvas transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {busy ? "Verifying access…" : "Switch workspace"}
-            </button>
-          </form>
+          <div className="space-y-1">
+            {workspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                type="button"
+                aria-current={workspace.id === currentId ? "true" : undefined}
+                onClick={() => {
+                  setWorkspaceId(workspace.id);
+                  setOpen(false);
+                }}
+                className={`w-full rounded-lg px-3 py-2 text-left transition ${
+                  workspace.id === currentId
+                    ? "bg-accent/10 text-accent"
+                    : "text-ink hover:bg-canvas"
+                }`}
+              >
+                <span className="block truncate text-xs font-medium">{workspace.name}</span>
+                <span className="mt-0.5 block truncate text-[10px] text-muted">
+                  {workspace.subscriptionTier}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
@@ -331,20 +321,77 @@ function UsageMeter({
 function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
   const { ready, authenticated, token, workspaceId, setWorkspaceId, signOut } = useDashboardSession();
-  const { data, error } = useWorkspaceMetrics(token, workspaceId, authenticated);
+  const [workspaces, setWorkspaces] = useState<DashboardWorkspace[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(true);
+  const [workspacesError, setWorkspacesError] = useState("");
+  const [workspaceLoadAttempt, setWorkspaceLoadAttempt] = useState(0);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const workspaceIdRef = useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
+  const { data, error } = useWorkspaceMetrics(
+    token,
+    workspaceId,
+    authenticated && !workspacesLoading && !workspacesError && Boolean(workspaceId),
+  );
 
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
 
   useEffect(() => {
-    if (!workspaceId && data?.workspace.id) {
-      setWorkspaceId(data.workspace.id);
+    if (!ready || !authenticated) {
+      return;
     }
-  }, [data?.workspace.id, setWorkspaceId, workspaceId]);
 
-  const currentName = data?.workspace.name ?? "SignalMend";
+    let active = true;
+    const loadWorkspaces = async () => {
+      setWorkspacesLoading(true);
+      setWorkspacesError("");
+      try {
+        const result = await dashboardFetch<{
+          workspaces: DashboardWorkspace[];
+        }>("/api/v1/dashboard/workspaces", { token, workspaceId: "" });
+        if (!active) {
+          return;
+        }
+        setWorkspaces(result.workspaces);
+        const selectedWorkspace = result.workspaces.some(
+          (workspace) => workspace.id === workspaceIdRef.current,
+        )
+          ? workspaceIdRef.current
+          : (result.workspaces[0]?.id ?? "");
+        setWorkspaceId(selectedWorkspace);
+      } catch (caught) {
+        if (active) {
+          setWorkspacesError(
+            caught instanceof Error
+              ? caught.message
+              : "Your workspaces could not be loaded.",
+          );
+        }
+      } finally {
+        if (active) {
+          setWorkspacesLoading(false);
+        }
+      }
+    };
+
+    void loadWorkspaces();
+    return () => {
+      active = false;
+    };
+  }, [
+    ready,
+    authenticated,
+    token,
+    workspaceLoadAttempt,
+    setWorkspaceId,
+  ]);
+
+  const selectedWorkspace = workspaces.find(
+    (workspace) => workspace.id === workspaceId,
+  );
+  const currentName = data?.workspace.name ?? selectedWorkspace?.name ?? "SignalMend";
   const tierLabel = data
     ? data.metrics.monthlyUsage.monthlyQuota >= 500_000
       ? "Enterprise"
@@ -355,6 +402,53 @@ function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
 
   if (!ready || !authenticated) {
     return <AccessGate />;
+  }
+  if (workspacesLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center text-sm text-muted">
+        <div className="flex items-center gap-3">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+          Loading your workspaces…
+        </div>
+      </div>
+    );
+  }
+  if (workspacesError) {
+    return (
+      <main className="grid min-h-screen place-items-center px-5 py-12">
+        <section className="w-full max-w-md rounded-3xl border border-line bg-surface p-7">
+          <h1 className="text-xl font-semibold text-ink">Workspaces unavailable</h1>
+          <p role="alert" className="mt-2 text-sm leading-6 text-muted">
+            {workspacesError}
+          </p>
+          <button
+            type="button"
+            onClick={() => setWorkspaceLoadAttempt((attempt) => attempt + 1)}
+            className="mt-5 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white"
+          >
+            Try again
+          </button>
+        </section>
+      </main>
+    );
+  }
+  if (workspaces.length === 0) {
+    return (
+      <main className="grid min-h-screen place-items-center px-5 py-12">
+        <section className="w-full max-w-md rounded-3xl border border-line bg-surface p-7">
+          <h1 className="text-xl font-semibold text-ink">No workspaces yet</h1>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Create or join a workspace to open the SignalMend dashboard.
+          </p>
+          <Link
+            href="/onboarding"
+            className="mt-5 inline-flex rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white"
+          >
+            Set up a workspace
+          </Link>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -394,7 +488,11 @@ function DashboardShell({ children }: Readonly<{ children: ReactNode }>) {
           </button>
         </div>
 
-        <WorkspaceSwitcher currentName={currentName} currentId={data?.workspace.id ?? workspaceId} />
+        <WorkspaceSwitcher
+          currentName={currentName}
+          currentId={workspaceId}
+          workspaces={workspaces}
+        />
 
         <div className="mt-4 flex items-center justify-between rounded-xl border border-line/70 bg-canvas/50 px-3 py-2.5">
           <div className="flex items-center gap-2">
