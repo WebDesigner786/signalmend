@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getAuthenticatedUserId } from "../../../lib/server/auth-session";
+import { ensureActiveTenantEncryptionKey } from "../../../lib/server/tenantEncryptionKey";
 import { withTenantContext } from "../../../lib/server/tenantRls";
-import { encryptSecret } from "../../../utils/crypto";
 import { prisma } from "../../../utils/prisma";
 
 export const runtime = "nodejs";
@@ -159,30 +159,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
 
       await withTenantContext(tenantId, async (transaction) => {
-        const key = await transaction.tenantEncryptionKey.findFirst({
-          where: { tenantId, isActive: true },
-          select: { id: true },
-        });
-        if (key) {
-          return key;
-        }
-        const latestKey = await transaction.tenantEncryptionKey.findFirst({
-          where: { tenantId },
-          orderBy: { keyVersion: "desc" },
-          select: { keyVersion: true },
-        });
-        const keyVersion = (latestKey?.keyVersion ?? 0) + 1;
-        const encryptedDataKey = encryptSecret(randomBytes(32).toString("base64url"));
-        return transaction.tenantEncryptionKey.create({
-          data: {
-            tenantId,
-            keyReference: `tenant:${tenantId}:v${keyVersion}`,
-            keyVersion,
-            encryptedDataKey,
-            wrappingIv: encryptedDataKey.split(":")[1],
-          },
-          select: { id: true },
-        });
+        await ensureActiveTenantEncryptionKey(transaction, tenantId);
       });
 
       return NextResponse.json(
@@ -202,7 +179,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const encryptedDataKey = encryptSecret(randomBytes(32).toString("base64url"));
     const workspaceSlug = `${parsed.data.businessName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -217,15 +193,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           businessNiche: parsed.data.businessNiche,
         },
       });
-      await transaction.tenantEncryptionKey.create({
-        data: {
-          tenantId,
-          keyReference: `tenant:${tenantId}:v1`,
-          keyVersion: 1,
-          encryptedDataKey,
-          wrappingIv: encryptedDataKey.split(":")[1],
-        },
-      });
+      await ensureActiveTenantEncryptionKey(transaction, tenantId);
       await transaction.tenantMember.create({
         data: { tenantId, userId, role: "owner" },
       });

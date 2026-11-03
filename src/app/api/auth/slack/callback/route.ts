@@ -13,6 +13,7 @@ import {
   markSlackHandshakeFailed,
   verifySlackHandshake,
 } from "../../../../../lib/server/slack-handshake";
+import { ensureActiveTenantEncryptionKey } from "../../../../../lib/server/tenantEncryptionKey";
 import { decryptSecret } from "../../../../../utils/crypto";
 import { VaultService } from "../../../../../utils/vaultService";
 
@@ -237,14 +238,10 @@ export async function GET(request: Request): Promise<NextResponse> {
         throw new Error("Tenant administrator access was revoked");
       }
 
-      const keyRecord = await transaction.tenantEncryptionKey.findFirst({
-        where: { tenantId: state.tenantId, isActive: true },
-        orderBy: { keyVersion: "desc" },
-        select: { id: true, encryptedDataKey: true },
-      });
-      if (!keyRecord) {
-        throw new Error("Tenant has no active encryption key");
-      }
+      const keyRecord = await ensureActiveTenantEncryptionKey(
+        transaction,
+        state.tenantId,
+      );
 
       const tenantKey = decryptSecret(keyRecord.encryptedDataKey);
       const encryptedPayload = vault.encryptToken(slack.access_token, tenantKey);
