@@ -24,6 +24,9 @@ const SlackChannelsSchema = z.object({
       is_member: z.boolean(),
     }),
   ).optional(),
+  response_metadata: z.object({
+    next_cursor: z.string().optional(),
+  }).optional(),
 });
 
 const SlackChannelSchema = z.object({
@@ -174,6 +177,40 @@ async function callSlack<T extends { ok: boolean; error?: string }>(
   return parsed.data;
 }
 
+async function loadSlackChannels(accessToken: string) {
+  const channels = new Map<string, { id: string; name: string; is_member: boolean }>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const result = await callSlack(
+      "conversations.list",
+      accessToken,
+      {
+        types: "public_channel,private_channel",
+        limit: "200",
+        ...(cursor ? { cursor } : {}),
+      },
+      SlackChannelsSchema,
+    );
+    for (const channel of result.channels ?? []) {
+      channels.set(channel.id, channel);
+    }
+
+    const nextCursor = result.response_metadata?.next_cursor?.trim();
+    if (!nextCursor) break;
+    if (cursors.has(nextCursor)) {
+      throw new Error("Slack returned a repeated channel pagination cursor");
+    }
+    cursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return [...channels.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 async function getAuthorizedSlackCredential(request: Request) {
   const context = await getDashboardRequestContext(request);
   if ("response" in context) return context;
@@ -191,13 +228,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     const context = await getAuthorizedSlackCredential(request);
     if ("response" in context) return context.response;
 
-    const [channelsResult, integration] = await Promise.all([
-      callSlack(
-        "conversations.list",
-        context.credential.accessToken,
-        { types: "public_channel,private_channel", limit: "200" },
-        SlackChannelsSchema,
-      ),
+    const [channels, integration] = await Promise.all([
+      loadSlackChannels(context.credential.accessToken),
       prisma.integration.findFirst({
         where: {
           workspaceId: context.workspace.id,
@@ -221,9 +253,11 @@ export async function GET(request: Request): Promise<NextResponse> {
         : null;
     return NextResponse.json({
       teamName: context.credential.teamName,
-      channels: (channelsResult.channels ?? [])
-        .filter((channel) => channel.is_member)
-        .map(({ id, name }) => ({ id, name })),
+      channels: channels.map(({ id, name, is_member }) => ({
+        id,
+        name,
+        isMember: is_member,
+      })),
       currentChannelId:
         config && typeof config.channelId === "string" ? config.channelId : null,
     });
