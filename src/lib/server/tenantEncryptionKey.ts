@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 
-import { encryptSecret } from "../../utils/crypto";
+import { decryptSecret, encryptSecret } from "../../utils/crypto";
 
 export type TenantEncryptionKeyRecord = {
   id: string;
@@ -18,8 +18,17 @@ export async function ensureActiveTenantEncryptionKey(
     orderBy: { keyVersion: "desc" },
     select: { id: true, keyVersion: true, encryptedDataKey: true },
   });
+
   if (activeKey) {
-    return activeKey;
+    try {
+      decryptSecret(activeKey.encryptedDataKey);
+      return activeKey;
+    } catch {
+      await transaction.tenantEncryptionKey.updateMany({
+        where: { tenantId, isActive: true },
+        data: { isActive: false },
+      });
+    }
   }
 
   const latestKey = await transaction.tenantEncryptionKey.findFirst({
