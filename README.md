@@ -33,11 +33,9 @@ promise that every planned feature is live.
 - Slack OAuth start/callback handlers validate one-time state, check tenant
   administrator membership and requested scopes, encrypt and save the Slack
   credential, and perform a Slack workspace verification handshake.
-- The dashboard has a separate bearer-token gate. Its APIs validate signed
-  HS256 dashboard JWTs and scope access to workspaces the user belongs to.
-  The application does **not** currently issue these dashboard JWTs; a
-  compatible identity/token-issuing integration is needed to make this a
-  seamless in-app login.
+- Dashboard APIs validate signed HS256 bearer tokens when supplied and also
+  support the signed-in NextAuth session used by the browser dashboard. Both
+  paths scope access to workspaces the user belongs to.
 
 ### Dashboard and API
 
@@ -88,8 +86,13 @@ are therefore not established.
 | `/dashboard` | Incident and metrics overview |
 | `/dashboard/endpoints` | Webhook endpoint management |
 | `/dashboard/rules` | Incident rule management |
+| `/dashboard/integrations` | Slack channel configuration and test alerts |
+| `/dashboard/billing` | Subscription checkout and plan status |
 
 ### Active Next.js API routes
+
+The browser dashboard uses its NextAuth session. External API clients may use a
+signed bearer token.
 
 Dashboard API routes expect `Authorization: Bearer <dashboard-JWT>`. Where
 applicable, `workspace_id` can be supplied as a query parameter; access is
@@ -103,6 +106,11 @@ validated against the authenticated user and any workspace scope in the token.
 | `GET` | `/api/auth/slack/callback` | Complete Slack OAuth callback |
 | `GET`, `POST` | `/api/onboarding` | List accessible workspaces and save business setup |
 | `GET` | `/api/onboarding/slack-status` | Read Slack verification status |
+| `GET`, `POST` | `/api/v1/integrations/slack` | List Slack channels and configure an alert destination |
+| `POST` | `/api/v1/integrations/slack/test` | Send a test alert to the configured channel |
+| `POST` | `/api/v1/integrations/slack/actions` | Process signed Slack incident actions |
+| `POST` | `/api/v1/billing/checkout` | Create a paid-plan checkout |
+| `POST` | `/api/v1/billing/webhook` | Apply signed Lemon Squeezy subscription events |
 | `GET`, `POST` | `/api/v1/webhook-endpoints` | List or create webhook endpoints |
 | `PATCH` | `/api/v1/webhook-endpoints/{endpointId}` | Update endpoint active/signature settings |
 | `POST` | `/api/v1/webhook-endpoints/{endpointId}/rotate-secret` | Rotate an endpoint signing secret |
@@ -111,13 +119,14 @@ validated against the authenticated user and any workspace scope in the token.
 | `GET` | `/api/v1/dashboard/metrics` | Read workspace metrics and usage |
 | `GET`, `POST` | `/api/v1/incident-rules` | List or create incident rules |
 
-There are also Fastify plugins under `src/routes/` for dashboard APIs, webhook
-handling, Slack interactive actions, and Lemon Squeezy billing webhooks. No
-Fastify server or plugin registration is present in the application entry
-points. Treat those plugins as standalone/unmounted code: the active Next.js
-routes above are the routes currently exposed by this app. In particular, the
-Fastify Slack-action and billing webhook handlers are not live merely because
-their source files exist.
+The billing webhook Next.js route adapts and registers its Fastify plugin.
+Slack interactive actions are handled by a Next.js route. Other Fastify
+plugins under `src/routes/` are standalone unless an active Next.js route
+explicitly registers them.
+
+Slack channel configuration lists paginated channels visible to the bot.
+Public channels may appear before the bot joins; invite SignalMend before
+saving. Private channels are visible only after the bot is invited.
 
 ## Data model and security foundations
 
@@ -136,6 +145,8 @@ Implemented security-related foundations include:
   for tenant and credential tables.
 - Workspace authorization for dashboard APIs, Redis-backed rate limiting and
   idempotency, and audit records for key incident and rejection events.
+- Billing webhooks track the provider subscription update timestamp and ignore
+  older events so delayed cancellations cannot override newer plan changes.
 
 These are implementation details, not a claim of completed SOC 2, GDPR, uptime,
 or other compliance certification. Production TLS, key management and rotation,
@@ -146,16 +157,10 @@ controls still need operational configuration and validation.
 
 The following blueprint goals are not yet implemented end to end:
 
-- **Seamless dashboard authentication:** issue dashboard JWTs from the app or
-  connect a supported identity provider; reconcile the dashboard bearer-token
-  gate with the NextAuth sign-in session.
-- **Slack delivery setup:** provide dashboard UI/API to select a channel and
-  persist an enabled `Integration` record from the verified OAuth credential.
-  The OAuth credential/verification flow and incident dispatch code exist, but
-  they do not by themselves provide a complete channel-configuration flow.
-- **Slack interactive actions:** wire the existing Fastify action handler into
-  a running server or implement it as a Next.js route, configure Slack's
-  request URL, and verify acknowledge/resolve/silence updates end to end.
+- **External dashboard authentication:** issue and rotate bearer JWTs only if
+  external API clients need them; the browser dashboard uses NextAuth.
+- **Slack operations:** configure Slack's interactivity request URL and verify
+  acknowledge/resolve/silence updates end to end in a staging workspace.
 - **Durable asynchronous processing:** enqueue webhook jobs, run workers, add
   retry/backoff and dead-letter handling, and measure latency/reliability
   against the product targets.
@@ -166,9 +171,11 @@ The following blueprint goals are not yet implemented end to end:
 - **Other integrations:** Google Sheets, Discord and email delivery are
   represented in parts of the schema/blueprint but do not have complete
   end-to-end integrations. There is no raw-payload search/replay workflow.
-- **Billing:** connect the pricing page to checkout and register the existing
-  Lemon Squeezy Fastify webhook handler. The pricing amounts are currently
-  static marketing content and must not be interpreted as active subscriptions.
+- **Billing operations:** configure Lemon Squeezy credentials and webhook
+  events, then test checkout, renewals, cancellations, and delayed event
+  delivery in staging. Pricing amounts are static marketing content and must
+  not be interpreted as active subscriptions until provider configuration is
+  complete.
 - **Incident operations:** add dashboard incident detail and state-transition
   controls, an audit-log viewer, notification configuration, and any required
   retention or export tools.
@@ -197,7 +204,7 @@ sketch also assumes Next standalone output that is not configured in
 | `ioredis` | Redis connections, rate limits, idempotency, and coordination |
 | `bcryptjs` | Password hashing and verification |
 | `zod` | Runtime validation for environment, API, and provider payloads |
-| `fastify`, `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit` | Fastify plugin code under `src/routes/`; no Fastify server is currently registered |
+| `fastify`, `@fastify/cors`, `@fastify/helmet`, `@fastify/rate-limit` | Fastify webhook adapter and standalone route plugins |
 | `lucide-react` | UI icons |
 | `recharts` | Dashboard chart visualizations |
 | `dotenv` | Environment loading |
@@ -221,8 +228,7 @@ sketch also assumes Next standalone output that is not configured in
 - PostgreSQL with the Prisma migrations applied.
 - Redis for webhook rate limiting, idempotency, and Slack OAuth state.
 - Slack app credentials for Slack OAuth and delivery.
-- A dashboard JWT issuer compatible with this app if using the protected
-  dashboard APIs.
+- A dashboard JWT issuer only if external bearer-token clients are needed.
 
 ## Local development
 
@@ -274,8 +280,8 @@ validated when first read; not every feature is usable with only placeholders.
 | `ENCRYPTION_SECRET` | Required; minimum 32 UTF-8 bytes | Key material for AES-256-GCM secret encryption |
 | `NEXTAUTH_SECRET` or `AUTH_SECRET` | Required; minimum 32 characters | NextAuth JWT/session signing |
 | `DASHBOARD_JWT_SECRET` | Required; minimum 32 characters | Verify dashboard HS256 bearer tokens and sign Slack OAuth state |
-| `SLACK_SIGNING_SECRET` | Required by configuration | Slack request signature validation in the standalone action plugin |
-| `LEMON_SQUEEZY_WEBHOOK_SECRET` or `LEMONSQUEEZY_WEBHOOK_SECRET` | Required by configuration | Billing webhook signature validation in the standalone billing plugin |
+| `SLACK_SIGNING_SECRET` | Required for Slack interactive actions | Slack request signature validation |
+| `LEMON_SQUEEZY_WEBHOOK_SECRET` or `LEMONSQUEEZY_WEBHOOK_SECRET` | Required for billing webhooks | Billing webhook signature validation |
 | `SLACK_CLIENT_ID` | Optional; configure with the next two | Slack OAuth client ID |
 | `SLACK_CLIENT_SECRET` | Optional; configure with the other OAuth values | Slack OAuth client secret |
 | `SLACK_REDIRECT_URI` | Optional; configure with both OAuth values | Slack OAuth callback URL |
@@ -305,7 +311,7 @@ src/
   integrations/        Slack message construction and API calls
   lib/                 Auth, dashboard clients, tenant access, webhook processing
   middleware/          Quota enforcement
-  routes/              Standalone Fastify route plugins (not registered by app)
+  routes/              Fastify plugins and adapters for selected Next.js routes
   utils/               Prisma, Redis, crypto, metrics, and credential vault
 prisma/
   migrations/          PostgreSQL schema migrations

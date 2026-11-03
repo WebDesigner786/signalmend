@@ -24,17 +24,16 @@ const SlackChannelsSchema = z.object({
       is_member: z.boolean(),
     }),
   ).optional(),
-});
-
-const SlackChannelSchema = z.object({
-  ok: z.boolean(),
-  error: z.string().optional(),
-  channel: z.object({
-    id: z.string(),
-    name: z.string(),
-    is_member: z.boolean(),
+  response_metadata: z.object({
+    next_cursor: z.string().optional(),
   }).optional(),
 });
+
+type SlackChannel = {
+  id: string;
+  name: string;
+  is_member: boolean;
+};
 
 interface SlackCredential {
   accessToken: string;
@@ -142,13 +141,15 @@ async function callSlack<T extends { ok: boolean; error?: string }>(
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`https://slack.com/api/${method}`, {
-      method: "POST",
+    const url = new URL(`https://slack.com/api/${method}`);
+    for (const [key, value] of Object.entries(body)) {
+      url.searchParams.set(key, value);
+    }
+    response = await fetch(url, {
+      method: "GET",
       headers: {
         authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json; charset=utf-8",
       },
-      body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
       cache: "no-store",
     });
@@ -174,6 +175,40 @@ async function callSlack<T extends { ok: boolean; error?: string }>(
   return parsed.data;
 }
 
+async function loadSlackChannels(accessToken: string): Promise<SlackChannel[]> {
+  const channels = new Map<string, SlackChannel>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const result = await callSlack(
+      "conversations.list",
+      accessToken,
+      {
+        types: "public_channel,private_channel",
+        limit: "200",
+        ...(cursor ? { cursor } : {}),
+      },
+      SlackChannelsSchema,
+    );
+    for (const channel of result.channels ?? []) {
+      channels.set(channel.id, channel);
+    }
+
+    const nextCursor = result.response_metadata?.next_cursor?.trim();
+    if (!nextCursor) break;
+    if (seenCursors.has(nextCursor)) {
+      throw new Error("Slack returned a repeated channel pagination cursor");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return [...channels.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 async function getAuthorizedSlackCredential(request: Request) {
   const context = await getDashboardRequestContext(request);
   if ("response" in context) return context;
@@ -191,13 +226,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     const context = await getAuthorizedSlackCredential(request);
     if ("response" in context) return context.response;
 
-    const [channelsResult, integration] = await Promise.all([
-      callSlack(
-        "conversations.list",
-        context.credential.accessToken,
-        { types: "public_channel,private_channel", limit: "200" },
-        SlackChannelsSchema,
-      ),
+    const [channels, integration] = await Promise.all([
+      loadSlackChannels(context.credential.accessToken),
       prisma.integration.findFirst({
         where: {
           workspaceId: context.workspace.id,
@@ -221,9 +251,11 @@ export async function GET(request: Request): Promise<NextResponse> {
         : null;
     return NextResponse.json({
       teamName: context.credential.teamName,
-      channels: (channelsResult.channels ?? [])
-        .filter((channel) => channel.is_member)
-        .map(({ id, name }) => ({ id, name })),
+      channels: channels.map(({ id, name, is_member }) => ({
+        id,
+        name,
+        isMember: is_member,
+      })),
       currentChannelId:
         config && typeof config.channelId === "string" ? config.channelId : null,
     });
@@ -252,14 +284,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const result = await callSlack(
-      "conversations.info",
-      context.credential.accessToken,
-      { channel: parsedBody.data.channelId },
-      SlackChannelSchema,
+    const channel = (await loadSlackChannels(context.credential.accessToken)).find(
+      ({ id }) => id === parsedBody.data.channelId,
     );
-    const channel = result.channel;
-    if (!channel || channel.id !== parsedBody.data.channelId || !channel.is_member) {
+    if (!channel || !channel.is_member) {
       return NextResponse.json(
         { error: "Invite the SignalMend bot to that channel before configuring alerts." },
         { status: 409 },

@@ -170,24 +170,26 @@ model AutomatedRule {
 }
 
 model Workspace {
-  id                     String            @id @default(uuid()) @db.Uuid
-  name                   String            @db.VarChar(255)
-  slug                   String            @unique @db.VarChar(255)
-  ownerId                String            @map("owner_id") @db.Uuid
-  tenantId               String?           @unique @map("tenant_id") @db.Uuid
-  subscriptionTier       SubscriptionTier  @default(free) @map("subscription_tier")
-  lemonSqueezyCustomerId String?           @unique @map("lemon_squeezy_customer_id") @db.VarChar(255)
-  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  owner                  User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  tenant                 Tenant?           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  members                WorkspaceMember[]
-  inboundWebhooks        InboundWebhook[]
-  incidentRules          IncidentRule[]
-  incidents              Incident[]
-  integrations           Integration[]
-  auditLogs              AuditLog[]
-  monthlyUsage           WorkspaceUsage[]
+  id                                String            @id @default(uuid()) @db.Uuid
+  name                              String            @db.VarChar(255)
+  slug                              String            @unique @db.VarChar(255)
+  ownerId                           String            @map("owner_id") @db.Uuid
+  tenantId                          String?           @unique @map("tenant_id") @db.Uuid
+  subscriptionTier                  SubscriptionTier  @default(free) @map("subscription_tier")
+  lemonSqueezyCustomerId            String?           @unique @map("lemon_squeezy_customer_id") @db.VarChar(255)
+  lemonSqueezySubscriptionId        String?           @map("lemon_squeezy_subscription_id") @db.VarChar(128)
+  lemonSqueezySubscriptionUpdatedAt DateTime?         @map("lemon_squeezy_subscription_updated_at") @db.Timestamptz(6)
+  createdAt                         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner                             User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  tenant                            Tenant?           @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  members                           WorkspaceMember[]
+  inboundWebhooks                   InboundWebhook[]
+  incidentRules                     IncidentRule[]
+  incidents                         Incident[]
+  integrations                      Integration[]
+  auditLogs                         AuditLog[]
+  monthlyUsage                      WorkspaceUsage[]
 
   @@index([ownerId])
   @@index([subscriptionTier])

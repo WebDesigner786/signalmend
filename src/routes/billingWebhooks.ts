@@ -28,6 +28,7 @@ const BillingEventSchema = z.object({
       variant_id: z.union([z.string().min(1), z.number().int().positive()]).optional(),
       variant_name: z.string().min(1).max(255).optional(),
       status: z.string().min(1).max(64),
+      updated_at: z.string().datetime({ offset: true }),
     }).passthrough(),
   }).passthrough(),
 }).passthrough();
@@ -40,6 +41,7 @@ interface BillingEvent {
   variantId: string | undefined;
   variantName: string | undefined;
   status: string;
+  updatedAt: string;
 }
 
 interface BillingWorkspace {
@@ -82,6 +84,7 @@ function decodeBillingEvent(payload: z.infer<typeof BillingEventSchema>): Billin
         : String(payload.data.attributes.variant_id),
     variantName: payload.data.attributes.variant_name,
     status: payload.data.attributes.status.toLowerCase(),
+    updatedAt: payload.data.attributes.updated_at,
   };
 }
 
@@ -281,17 +284,30 @@ const billingWebhooksRoutes: FastifyPluginAsync = async (fastify) => {
         }
         const tenantId = workspace.tenantId;
 
-        await prisma.$transaction(async (transaction) => {
+        const applied = await prisma.$transaction(async (transaction) => {
           await transaction.$queryRaw<Array<{ set_config: string }>>`
             SELECT set_config('app.tenant_id', ${tenantId}, true)
           `;
-          await transaction.workspace.update({
-            where: { id: workspace.id },
-            data: {
-              subscriptionTier: tier,
-              lemonSqueezyCustomerId: event.customerId,
-            },
-          });
+          const updated = await transaction.$queryRaw<Array<{ id: string }>>`
+            UPDATE "workspaces"
+            SET
+              "subscription_tier" = ${tier}::"subscription_tier",
+              "lemon_squeezy_customer_id" = ${event.customerId},
+              "lemon_squeezy_subscription_id" = ${event.subscriptionId},
+              "lemon_squeezy_subscription_updated_at" = ${event.updatedAt}::timestamptz,
+              "updated_at" = NOW()
+            WHERE "id" = ${workspace.id}
+              AND "tenant_id" = ${tenantId}
+              AND (
+                "lemon_squeezy_subscription_updated_at" IS NULL
+                OR "lemon_squeezy_subscription_updated_at" < ${event.updatedAt}::timestamptz
+              )
+            RETURNING "id"
+          `;
+          if (updated.length === 0) {
+            return false;
+          }
+
           await transaction.tenant.update({
             where: { id: tenantId },
             data: {
@@ -315,25 +331,27 @@ const billingWebhooksRoutes: FastifyPluginAsync = async (fastify) => {
                 subscriptionStatus: event.status,
                 variantName: event.variantName ?? null,
                 subscriptionTier: tier,
+                subscriptionUpdatedAt: event.updatedAt,
               },
             },
           });
+          return true;
         });
         await markEventProcessed(lockKey, lockToken);
 
-        request.log.info(
-          {
-            workspaceId: workspace.id,
-            subscriptionId: event.subscriptionId,
-            eventName: event.eventName,
-            subscriptionTier: tier,
-          },
-          "Applied Lemon Squeezy subscription event",
-        );
+        request.log.info({
+          workspaceId: workspace.id,
+          subscriptionId: event.subscriptionId,
+          eventName: event.eventName,
+          subscriptionTier: tier,
+          stale: !applied,
+        }, applied
+          ? "Applied Lemon Squeezy subscription event"
+          : "Ignored stale Lemon Squeezy subscription event");
         return reply.code(200).send({
           success: true,
           workspace_id: workspace.id,
-          subscription_tier: tier,
+          ...(applied ? { subscription_tier: tier } : { stale: true }),
         });
       } catch (error) {
         try {

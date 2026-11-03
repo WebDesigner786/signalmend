@@ -10,6 +10,7 @@ import { useDashboardSession } from "../../../lib/dashboard-session";
 interface SlackChannel {
   id: string;
   name: string;
+  isMember: boolean;
 }
 
 interface SlackConfiguration {
@@ -31,7 +32,9 @@ function isSlackConfiguration(value: unknown): value is SlackConfiguration {
         "id" in channel &&
         typeof channel.id === "string" &&
         "name" in channel &&
-        typeof channel.name === "string",
+        typeof channel.name === "string" &&
+        "isMember" in channel &&
+        typeof channel.isMember === "boolean",
     ) &&
     (record.currentChannelId === null ||
       typeof record.currentChannelId === "string")
@@ -134,8 +137,9 @@ export default function IntegrationsPage() {
           Slack alerts
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Choose a channel where SignalMend can post incident alerts. Invite the
-          SignalMend bot to the channel before selecting it.
+          Choose a channel where SignalMend can post incident alerts. Public
+          channels appear even if the bot has not joined yet. Private channels
+          are visible after you invite the bot.
         </p>
       </header>
 
@@ -194,14 +198,29 @@ export default function IntegrationsPage() {
                 className="w-full rounded-xl border border-line bg-canvas/70 px-3.5 py-3 text-xs text-ink disabled:opacity-50"
               >
                 {configuration.channels.length === 0 ? (
-                  <option value="">No channels found</option>
+                  <option value="">No accessible channels found</option>
                 ) : null}
                 {configuration.channels.map((channel) => (
                   <option key={channel.id} value={channel.id}>
                     #{channel.name}
+                    {channel.isMember ? "" : " (invite SignalMend bot)"}
                   </option>
                 ))}
               </select>
+              {configuration.channels.length === 0 ? (
+                <span className="mt-2 block text-[10px] leading-5 text-muted">
+                  Check that the Slack app is installed in this workspace. Add
+                  SignalMend to private channels to make them visible here.
+                </span>
+              ) : selectedChannelId &&
+                !configuration.channels.find(
+                  (channel) => channel.id === selectedChannelId,
+                )?.isMember ? (
+                <span className="mt-2 block text-[10px] leading-5 text-muted">
+                  Invite the SignalMend bot to this channel in Slack, then
+                  refresh before saving.
+                </span>
+              ) : null}
             </label>
             <div className="flex flex-wrap gap-2">
               <button
@@ -211,6 +230,9 @@ export default function IntegrationsPage() {
                   saving ||
                   loading ||
                   !selectedChannelId ||
+                  !configuration.channels.find(
+                    (channel) => channel.id === selectedChannelId,
+                  )?.isMember ||
                   selectedChannelId === configuration.currentChannelId
                 }
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-xs font-semibold text-white shadow-lg shadow-accent/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
