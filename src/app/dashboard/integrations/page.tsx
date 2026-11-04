@@ -11,6 +11,7 @@ interface SlackChannel {
   id: string;
   name: string;
   isMember: boolean;
+  isPrivate: boolean;
 }
 
 interface SlackConfiguration {
@@ -34,7 +35,9 @@ function isSlackConfiguration(value: unknown): value is SlackConfiguration {
         "name" in channel &&
         typeof channel.name === "string" &&
         "isMember" in channel &&
-        typeof channel.isMember === "boolean",
+        typeof channel.isMember === "boolean" &&
+        "isPrivate" in channel &&
+        typeof channel.isPrivate === "boolean",
     ) &&
     (record.currentChannelId === null ||
       typeof record.currentChannelId === "string")
@@ -84,6 +87,10 @@ export default function IntegrationsPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const selectedChannel = configuration?.channels.find(
+    (channel) => channel.id === selectedChannelId,
+  );
 
   const save = async () => {
     setSaving(true);
@@ -137,9 +144,8 @@ export default function IntegrationsPage() {
           Slack alerts
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-          Choose a channel where SignalMend can post incident alerts. Public
-          channels appear even if the bot has not joined yet. Private channels
-          are visible after you invite the bot.
+          Choose a Slack channel for incident alerts. SignalMend can join public
+          channels when you save; invite it to private channels first.
         </p>
       </header>
 
@@ -203,7 +209,11 @@ export default function IntegrationsPage() {
                 {configuration.channels.map((channel) => (
                   <option key={channel.id} value={channel.id}>
                     #{channel.name}
-                    {channel.isMember ? "" : " (invite SignalMend bot)"}
+                    {channel.isMember
+                      ? ""
+                      : channel.isPrivate
+                        ? " (invite SignalMend bot)"
+                        : " (join on save)"}
                   </option>
                 ))}
               </select>
@@ -212,13 +222,14 @@ export default function IntegrationsPage() {
                   Check that the Slack app is installed in this workspace. Add
                   SignalMend to private channels to make them visible here.
                 </span>
-              ) : selectedChannelId &&
-                !configuration.channels.find(
-                  (channel) => channel.id === selectedChannelId,
-                )?.isMember ? (
+              ) : selectedChannel && !selectedChannel.isMember && selectedChannel.isPrivate ? (
                 <span className="mt-2 block text-[10px] leading-5 text-muted">
-                  Invite the SignalMend bot to this channel in Slack, then
-                  refresh before saving.
+                  Invite the SignalMend bot to this private channel in Slack,
+                  then refresh before saving.
+                </span>
+              ) : selectedChannel && !selectedChannel.isMember ? (
+                <span className="mt-2 block text-[10px] leading-5 text-muted">
+                  Saving will add SignalMend to this public channel.
                 </span>
               ) : null}
             </label>
@@ -230,15 +241,19 @@ export default function IntegrationsPage() {
                   saving ||
                   loading ||
                   !selectedChannelId ||
-                  !configuration.channels.find(
-                    (channel) => channel.id === selectedChannelId,
-                  )?.isMember ||
-                  selectedChannelId === configuration.currentChannelId
+                  (selectedChannelId === configuration.currentChannelId &&
+                    selectedChannel?.isMember === true) ||
+                  (selectedChannel?.isPrivate === true &&
+                    selectedChannel.isMember === false)
                 }
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-xs font-semibold text-white shadow-lg shadow-accent/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-                {saving ? "Saving…" : "Save channel"}
+                {saving
+                  ? "Saving…"
+                  : selectedChannel?.isMember
+                    ? "Save channel"
+                    : "Join & save"}
               </button>
               <button
                 type="button"

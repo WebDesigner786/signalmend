@@ -125,8 +125,9 @@ plugins under `src/routes/` are standalone unless an active Next.js route
 explicitly registers them.
 
 Slack channel configuration lists paginated channels visible to the bot.
-Public channels may appear before the bot joins; invite SignalMend before
-saving. Private channels are visible only after the bot is invited.
+SignalMend joins public channels on save; invite it to private channels before
+saving. The Slack app needs the `channels:join` bot scope; reconnect an existing
+installation after enabling that scope.
 
 ## Data model and security foundations
 

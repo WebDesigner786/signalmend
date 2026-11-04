@@ -22,6 +22,8 @@ const SlackChannelsSchema = z.object({
       id: z.string(),
       name: z.string(),
       is_member: z.boolean(),
+      is_private: z.boolean(),
+      is_archived: z.boolean().optional(),
     }),
   ).optional(),
   response_metadata: z.object({
@@ -33,7 +35,29 @@ type SlackChannel = {
   id: string;
   name: string;
   is_member: boolean;
+  is_private: boolean;
+  is_archived?: boolean;
 };
+
+const SlackJoinedChannelSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  channel: z.object({
+    id: z.string(),
+    name: z.string(),
+    is_member: z.boolean(),
+  }).optional(),
+});
+
+class SlackApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = "SlackApiError";
+  }
+}
 
 interface SlackCredential {
   accessToken: string;
@@ -138,18 +162,27 @@ async function callSlack<T extends { ok: boolean; error?: string }>(
   accessToken: string,
   body: Record<string, string>,
   schema: z.ZodType<T>,
+  requestMethod: "GET" | "POST" = "GET",
 ): Promise<T> {
   let response: Response;
   try {
     const url = new URL(`https://slack.com/api/${method}`);
-    for (const [key, value] of Object.entries(body)) {
-      url.searchParams.set(key, value);
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+    };
+    let requestBody: string | undefined;
+    if (requestMethod === "GET") {
+      for (const [key, value] of Object.entries(body)) {
+        url.searchParams.set(key, value);
+      }
+    } else {
+      headers["content-type"] = "application/x-www-form-urlencoded";
+      requestBody = new URLSearchParams(body).toString();
     }
     response = await fetch(url, {
-      method: "GET",
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-      },
+      method: requestMethod,
+      headers,
+      ...(requestBody ? { body: requestBody } : {}),
       signal: AbortSignal.timeout(10_000),
       cache: "no-store",
     });
@@ -166,11 +199,11 @@ async function callSlack<T extends { ok: boolean; error?: string }>(
   }
   const parsed = schema.safeParse(result);
   if (!response.ok || !parsed.success || !parsed.data.ok) {
-    const reason =
+    const code =
       parsed.success && parsed.data.error
         ? parsed.data.error
         : `HTTP ${response.status}`;
-    throw new Error(`Slack request failed: ${reason}`);
+    throw new SlackApiError(`Slack request failed: ${code}`, code);
   }
   return parsed.data;
 }
@@ -251,10 +284,11 @@ export async function GET(request: Request): Promise<NextResponse> {
         : null;
     return NextResponse.json({
       teamName: context.credential.teamName,
-      channels: channels.map(({ id, name, is_member }) => ({
+      channels: channels.map(({ id, name, is_member, is_private }) => ({
         id,
         name,
         isMember: is_member,
+        isPrivate: is_private,
       })),
       currentChannelId:
         config && typeof config.channelId === "string" ? config.channelId : null,
@@ -284,14 +318,48 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const channel = (await loadSlackChannels(context.credential.accessToken)).find(
+    let channel = (await loadSlackChannels(context.credential.accessToken)).find(
       ({ id }) => id === parsedBody.data.channelId,
     );
-    if (!channel || !channel.is_member) {
+    if (!channel) {
       return NextResponse.json(
-        { error: "Invite the SignalMend bot to that channel before configuring alerts." },
-        { status: 409 },
+        { error: "That Slack channel is no longer available. Refresh the channel list and try again." },
+        { status: 404 },
       );
+    }
+    if (!channel.is_member) {
+      if (channel.is_private) {
+        return NextResponse.json(
+          { error: "Invite the SignalMend bot to this private channel in Slack, then refresh and save again." },
+          { status: 409 },
+        );
+      }
+
+      try {
+        const joined = await callSlack(
+          "conversations.join",
+          context.credential.accessToken,
+          { channel: channel.id },
+          SlackJoinedChannelSchema,
+          "POST",
+        );
+        if (!joined.channel?.is_member || joined.channel.id !== channel.id) {
+          throw new Error("Slack did not confirm SignalMend joined the channel.");
+        }
+        channel = {
+          ...channel,
+          name: joined.channel.name,
+          is_member: true,
+        };
+      } catch (error) {
+        if (error instanceof SlackApiError && error.code === "missing_scope") {
+          return NextResponse.json(
+            { error: "Reconnect Slack to grant the channels:join permission, then save this public channel again." },
+            { status: 403 },
+          );
+        }
+        throw error;
+      }
     }
 
     const existing = await prisma.integration.findFirst({

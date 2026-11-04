@@ -71,13 +71,15 @@ In the Slack app settings:
    exact match, including scheme, hostname, path, and trailing slash. If using a
    custom domain or Vercel preview, configure that environment's canonical URL
    and register its corresponding callback separately.
-2. Enable bot scopes `chat:write`, `team:read`, `channels:read`, and
-   `groups:read`.
+2. Enable bot scopes `chat:write`, `team:read`, `channels:read`, `channels:join`,
+   and `groups:read`. If the app is already installed, reconnect it from
+   SignalMend to grant the new `channels:join` permission.
 3. Set the Interactivity request URL to
    `https://<production-domain>/api/v1/integrations/slack/actions`.
 4. Configure the app's signing secret in `SLACK_SIGNING_SECRET`.
-5. Connect Slack in onboarding, invite the bot to the alert channel, and select
-   that channel under **Dashboard → Integrations**.
+5. Connect Slack in onboarding and select an alert channel under
+   **Dashboard → Integrations**. SignalMend joins public channels on save;
+   invite the bot to private channels before selecting them.
 6. Send a test webhook and confirm the incident message and buttons work in the
    target workspace.
 

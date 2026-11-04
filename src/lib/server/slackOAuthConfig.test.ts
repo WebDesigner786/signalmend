@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveSlackOAuthConfiguration } from "./slackOAuthConfig";
+import {
+  resolveSlackOAuthConfiguration,
+  REQUIRED_SLACK_SCOPES,
+} from "./slackOAuthConfig";
 
 const appUrl = "https://signalmend-mu.vercel.app";
 const redirectUri =
   "https://signalmend-mu.vercel.app/api/auth/slack/callback";
 
 describe("Slack OAuth configuration", () => {
+  it("requests the scope needed to join a public channel on save", () => {
+    expect(REQUIRED_SLACK_SCOPES).toContain("channels:join");
+  });
+
   it("accepts a callback URL matching the canonical app origin and path", () => {
     expect(
       resolveSlackOAuthConfiguration({

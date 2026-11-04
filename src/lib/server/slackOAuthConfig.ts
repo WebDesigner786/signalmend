@@ -6,6 +6,7 @@ export const REQUIRED_SLACK_SCOPES = [
   "chat:write",
   "team:read",
   "channels:read",
+  "channels:join",
   "groups:read",
 ] as const;
 

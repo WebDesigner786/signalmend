@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   findIntegration: vi.fn(),
   decryptSecret: vi.fn(),
   decryptToken: vi.fn(),
+  dbTransaction: vi.fn(),
+  createIntegration: vi.fn(),
+  updateIntegration: vi.fn(),
+  createAuditLog: vi.fn(),
 }));
 
 vi.mock("../../../../../lib/server/dashboard-request", () => ({
@@ -29,6 +33,7 @@ vi.mock("../../../../../utils/prisma", () => ({
   prisma: {
     workspace: { findUnique: mocks.findWorkspace },
     integration: { findFirst: mocks.findIntegration },
+    $transaction: mocks.dbTransaction,
   },
 }));
 
@@ -47,6 +52,17 @@ afterEach(() => {
 describe("Slack channel configuration API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.dbTransaction.mockImplementation(async (callback) =>
+      callback({
+        integration: {
+          create: mocks.createIntegration,
+          update: mocks.updateIntegration,
+        },
+        auditLog: { create: mocks.createAuditLog },
+      }),
+    );
+    mocks.createIntegration.mockResolvedValue({ id: "integration-1" });
+    mocks.createAuditLog.mockResolvedValue({});
     mocks.getDashboardRequestContext.mockResolvedValue({
       workspace: { id: "workspace-1" },
       identity: { userId: "user-1" },
@@ -82,12 +98,12 @@ describe("Slack channel configuration API", () => {
     const pages = [
       {
         ok: true,
-        channels: [{ id: "C123456", name: "public-room", is_member: false }],
+          channels: [{ id: "C123456", name: "public-room", is_member: false, is_private: false }],
         response_metadata: { next_cursor: "next-page" },
       },
       {
         ok: true,
-        channels: [{ id: "C_JOINED", name: "alerts", is_member: true }],
+          channels: [{ id: "C_JOINED", name: "alerts", is_member: true, is_private: false }],
         response_metadata: { next_cursor: "" },
       },
     ];
@@ -107,8 +123,8 @@ describe("Slack channel configuration API", () => {
     expect(await response.json()).toEqual({
       teamName: "Example workspace",
       channels: [
-        { id: "C_JOINED", name: "alerts", isMember: true },
-        { id: "C123456", name: "public-room", isMember: false },
+        { id: "C_JOINED", name: "alerts", isMember: true, isPrivate: false },
+        { id: "C123456", name: "public-room", isMember: false, isPrivate: false },
       ],
       currentChannelId: null,
     });
@@ -118,16 +134,112 @@ describe("Slack channel configuration API", () => {
     expect(calls[1].url.searchParams.get("cursor")).toBe("next-page");
   });
 
-  it("rejects saving a channel until the bot has joined it", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
+  it("joins a public channel before saving the integration", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
         Response.json({
           ok: true,
-          channels: [{ id: "C123456", name: "public-room", is_member: false }],
+          channels: [
+            {
+              id: "C123456",
+              name: "public-room",
+              is_member: false,
+              is_private: false,
+            },
+          ],
           response_metadata: { next_cursor: "" },
         }),
-      ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          channel: { id: "C123456", name: "public-room", is_member: true },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new Request("https://signalmend.test/api/v1/integrations/slack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelId: "C123456" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      integrationId: "integration-1",
+      channelId: "C123456",
+      channelName: "public-room",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const joinRequest = fetchMock.mock.calls[1];
+    expect(joinRequest[1]).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({
+        "content-type": "application/x-www-form-urlencoded",
+      }),
+      body: "channel=C123456",
+    });
+    expect(mocks.createIntegration).toHaveBeenCalled();
+  });
+
+  it("requires a manual invite for private channels", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        channels: [
+          {
+            id: "G123456",
+            name: "private-room",
+            is_member: false,
+            is_private: true,
+          },
+        ],
+        response_metadata: { next_cursor: "" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new Request("https://signalmend.test/api/v1/integrations/slack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelId: "G123456" }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("Invite the SignalMend bot"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mocks.createIntegration).not.toHaveBeenCalled();
+  });
+
+  it("prompts Slack reconnection if the join permission was not granted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            channels: [
+              {
+                id: "C123456",
+                name: "public-room",
+                is_member: false,
+                is_private: false,
+              },
+            ],
+            response_metadata: { next_cursor: "" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({ ok: false, error: "missing_scope" }),
+        ),
     );
 
     const response = await POST(
@@ -138,10 +250,10 @@ describe("Slack channel configuration API", () => {
       }),
     );
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: "Invite the SignalMend bot to that channel before configuring alerts.",
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("Reconnect Slack"),
     });
-    expect(mocks.findIntegration).not.toHaveBeenCalled();
+    expect(mocks.createIntegration).not.toHaveBeenCalled();
   });
 });
