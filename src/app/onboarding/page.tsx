@@ -225,6 +225,7 @@ function AuthenticationPanel({
     event.preventDefault();
     setSubmitting(true);
     setError("");
+    let accountCreated = false;
 
     try {
       if (mode === "signup") {
@@ -240,10 +241,18 @@ function AuthenticationPanel({
         });
         const body: unknown = await response.json().catch(() => null);
         if (!response.ok) {
+          if (response.status === 409) {
+            setMode("signin");
+            setError(
+              "An account with this email already exists. Sign in with your existing password.",
+            );
+            return;
+          }
           throw new Error(
             getErrorMessage(body, "Your account could not be created."),
           );
         }
+        accountCreated = true;
       }
 
       const result = await signIn("credentials", {
@@ -252,7 +261,18 @@ function AuthenticationPanel({
         redirect: false,
       });
       if (!result || result.error) {
-        throw new Error("Email or password is incorrect.");
+        if (accountCreated) {
+          setMode("signin");
+          setError(
+            "Your account was created, but automatic sign-in failed. Sign in with the same email and password.",
+          );
+          return;
+        }
+        throw new Error(
+          result?.error === "CredentialsSignin"
+            ? "Email or password is incorrect. Check that you are using the same SignalMend deployment where you created your account."
+            : "Sign-in is temporarily unavailable. Please try again.",
+        );
       }
       onAuthenticated();
     } catch (caught) {

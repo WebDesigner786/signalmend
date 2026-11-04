@@ -14,6 +14,47 @@ const CredentialsSchema = z.object({
     .refine((value) => Buffer.byteLength(value, "utf8") <= 72),
 });
 
+export async function authorizeCredentials(credentials: unknown) {
+  const parsed = CredentialsSchema.safeParse(credentials);
+  if (!parsed.success) return null;
+
+  let failureStage: "user_lookup" | "password_verification" = "user_lookup";
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email: parsed.data.email.toLowerCase() },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        passwordHash: true,
+      },
+    });
+    if (!user?.passwordHash) return null;
+
+    failureStage = "password_verification";
+    const isValidPassword = await compare(
+      parsed.data.password,
+      user.passwordHash,
+    );
+    if (!isValidPassword) return null;
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+    };
+  } catch (error) {
+    console.error("[Auth Error] Credentials authorization failed.", {
+      stage: failureStage,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Unknown credentials authorization error",
+    });
+    throw new Error("Credentials authorization is temporarily unavailable.");
+  }
+}
+
 export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
@@ -29,48 +70,7 @@ export const authOptions: NextAuthOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
-        const parsed = CredentialsSchema.safeParse(credentials);
-        if (!parsed.success) return null;
-
-        let failureStage:
-          | "user_lookup"
-          | "password_verification" = "user_lookup";
-        try {
-          const user = await prisma.user.findUnique({
-            where: { email: parsed.data.email.toLowerCase() },
-            select: {
-              id: true,
-              email: true,
-              name: true,
-              passwordHash: true,
-            },
-          });
-          if (!user?.passwordHash) return null;
-
-          failureStage = "password_verification";
-          const isValidPassword = await compare(
-            parsed.data.password,
-            user.passwordHash,
-          );
-          if (!isValidPassword) return null;
-
-          return {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-          };
-        } catch (error) {
-          console.error("[Auth Error] Credentials authorization failed.", {
-            stage: failureStage,
-            message:
-              error instanceof Error
-                ? error.message
-                : "Unknown credentials authorization error",
-          });
-          return null;
-        }
-      },
+      authorize: (credentials) => authorizeCredentials(credentials),
     }),
   ],
   callbacks: {
